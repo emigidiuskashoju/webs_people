@@ -5,7 +5,7 @@ import '../models/call_record.dart';
 
 class CallDatabase {
   static const String _databaseName =
-      'webs_people_calls.db';
+      'webs_calls.db';
 
   /*
    * Version 1 contains the complete initial

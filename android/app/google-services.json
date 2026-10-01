@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "317203695423",
+    "project_id": "webs-people-5ef5c",
+    "storage_bucket": "webs-people-5ef5c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:317203695423:android:5a41ef2e721b3e1238f58a",
+        "android_client_info": {
+          "package_name": "com.liko.webs"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAwpUO1AAMFZkcfBNYWk7Mj3akOkEN8qMM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

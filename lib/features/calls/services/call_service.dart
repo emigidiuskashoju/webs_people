@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
+import '../../../core/notifications/notification_service.dart';
 import '../data/call_repository.dart';
 import '../models/call_record.dart';
 import 'call_signaling_service.dart';
@@ -51,6 +52,8 @@ class CallService {
     callStatus.value =
         CallStatus.calling;
 
+    CallRecord? record;
+
     try {
       final start =
           await _signaling.startCall(
@@ -58,7 +61,9 @@ class CallService {
         type: 'audio',
       );
 
-      final record =
+      _activeCallId = start.callId;
+
+      record =
           await _repository.createOutgoingCall(
         ownerUserId: ownerUserId,
         callId: start.callId,
@@ -69,7 +74,6 @@ class CallService {
         type: CallType.audio,
       );
 
-      _activeCallId = start.callId;
       _activeRecord = record;
 
       _webRtc.onIceCandidate =
@@ -103,8 +107,15 @@ class CallService {
       callStatus.value =
           CallStatus.failed;
 
-      callError =
-          e.toString();
+      callError = e.toString();
+
+      if (record != null) {
+        try {
+          await _repository.markEnded(
+            record.localId,
+          );
+        } catch (_) {}
+      }
 
       await _webRtc.close();
 
@@ -126,10 +137,7 @@ class CallService {
       (_) async {
         try {
           await _processActiveCallEvents();
-        } catch (_) {
-          // Polling failure must not crash
-          // the call screen.
-        }
+        } catch (_) {}
       },
     );
   }
@@ -155,9 +163,7 @@ class CallService {
         await _signaling.acknowledgeEvent(
           event.id,
         );
-      } catch (_) {
-        // The event may be retrieved again.
-      }
+      } catch (_) {}
     }
   }
 
@@ -351,10 +357,7 @@ class CallService {
               candidate.sdpMLineIndex,
         },
       );
-    } catch (_) {
-      // ICE delivery is retried through
-      // subsequent connection behavior.
-    }
+    } catch (_) {}
   }
 
   void _handleConnectionState(
@@ -449,6 +452,14 @@ class CallService {
     final record =
         _activeRecord;
 
+    // Stop any lingering call notification vibration.
+    if (callId != null) {
+      try {
+        await NotificationService.instance
+            .dismissIncomingCallNotification(callId);
+      } catch (_) {}
+    }
+
     if (callId != null &&
         remoteUserId != null) {
       try {
@@ -457,9 +468,7 @@ class CallService {
           recipientId: remoteUserId,
           event: 'end',
         );
-      } catch (_) {
-        // The local call must still end.
-      }
+      } catch (_) {}
     }
 
     if (record != null) {

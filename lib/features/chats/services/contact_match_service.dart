@@ -7,11 +7,13 @@ class ContactMatchUser {
   final int id;
   final String name;
   final String phoneNumber;
+  final String? profilePhotoUrl;
 
   const ContactMatchUser({
     required this.id,
     required this.name,
     required this.phoneNumber,
+    this.profilePhotoUrl,
   });
 
   factory ContactMatchUser.fromJson(
@@ -27,10 +29,10 @@ class ContactMatchUser {
 
     return ContactMatchUser(
       id: id,
-      name:
-          json['name']?.toString() ?? '',
-      phoneNumber:
-          json['phone_number']?.toString() ?? '',
+      name: json['name']?.toString() ?? '',
+      phoneNumber: json['phone_number']?.toString() ?? '',
+      profilePhotoUrl:
+          json['profile_photo_url']?.toString(),
     );
   }
 }
@@ -42,43 +44,35 @@ class ContactMatchService {
   ContactMatchService({
     ApiClient? apiClient,
     AuthStorage? storage,
-  })  : _apiClient =
-            apiClient ?? ApiClient(),
-        _storage =
-            storage ?? AuthStorage();
+  })  : _apiClient = apiClient ?? ApiClient(),
+        _storage = storage ?? AuthStorage();
 
   Future<List<ContactMatchUser>> matchPhoneNumbers(
     List<String> phoneNumbers,
   ) async {
-    final token =
-        await _storage.getToken();
+    final token = await _storage.getToken();
 
-    if (token == null ||
-        token.isEmpty) {
+    if (token == null || token.isEmpty) {
       throw const ApiException(
         'No authentication token was found.',
       );
     }
 
-    final response =
-        await _apiClient.post(
+    final response = await _apiClient.post(
       ApiEndpoints.contactMatch,
       token: token,
       body: {
-        'phone_numbers':
-            phoneNumbers,
+        'phone_numbers': phoneNumbers,
       },
     );
 
-    if (response
-        is! Map<String, dynamic>) {
+    if (response is! Map<String, dynamic>) {
       throw const ApiException(
         'Invalid contact matching response.',
       );
     }
 
-    final users =
-        response['users'];
+    final users = response['users'];
 
     if (users is! List) {
       throw const ApiException(
@@ -87,11 +81,8 @@ class ContactMatchService {
     }
 
     return users
-        .whereType<
-            Map<String, dynamic>>()
-        .map(
-          ContactMatchUser.fromJson,
-        )
+        .whereType<Map<String, dynamic>>()
+        .map(ContactMatchUser.fromJson)
         .toList();
   }
 }

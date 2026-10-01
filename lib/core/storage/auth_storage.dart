@@ -2,7 +2,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class AuthStorage {
   static const String _tokenKey =
-      'webs_people_auth_token';
+      'webs_auth_token';
 
   final FlutterSecureStorage _storage;
 
@@ -28,8 +28,7 @@ class AuthStorage {
   }
 
   Future<bool> hasToken() async {
-    final token =
-        await getToken();
+    final token = await getToken();
 
     return token != null &&
         token.isNotEmpty;

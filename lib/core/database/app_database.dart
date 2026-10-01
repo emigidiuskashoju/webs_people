@@ -3,7 +3,7 @@ import 'package:sqflite/sqflite.dart';
 
 class AppDatabase {
   static const String _databaseName =
-      'webs_people.db';
+      'webs.db';
 
   static const int _databaseVersion = 3;
 

@@ -51,7 +51,7 @@ class SavedAccount {
 
 class SavedAccountStorage {
   static const String _accountsKey =
-      'webs_people_saved_accounts';
+      'webs_saved_accounts';
 
   final FlutterSecureStorage _storage;
 

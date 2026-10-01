@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
@@ -12,94 +13,169 @@ class ApiClient {
     http.Client? client,
   }) : _client = client ?? http.Client();
 
+  // ============================================================
+  // HEADERS
+  // ============================================================
+
   Map<String, String> _headers({
     String? token,
+    String? deviceSecret,
   }) {
-    final headers = <String, String>{
+    return {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
+
+      if (token != null && token.isNotEmpty)
+        'Authorization': 'Bearer $token',
+
+      if (deviceSecret != null && deviceSecret.isNotEmpty)
+        'X-Webs-Device-Secret': deviceSecret,
     };
-
-    if (token != null && token.isNotEmpty) {
-      headers['Authorization'] =
-          'Bearer $token';
-    }
-
-    return headers;
   }
+
+  // ============================================================
+  // GET
+  // ============================================================
 
   Future<dynamic> get(
     String endpoint, {
     String? token,
+    String? deviceSecret,
   }) async {
-    try {
-      final response = await _client.get(
+    return _send(
+      () => _client.get(
         Uri.parse(
           '${ApiEndpoints.baseUrl}$endpoint',
         ),
         headers: _headers(
           token: token,
+          deviceSecret: deviceSecret,
         ),
-      );
-
-      return _handleResponse(response);
-    } catch (e) {
-      if (e is ApiException) {
-        rethrow;
-      }
-
-      throw const ApiException(
-        'Unable to connect to the Webs People server.',
-      );
-    }
+      ),
+    );
   }
+
+  // ============================================================
+  // POST
+  // ============================================================
 
   Future<dynamic> post(
     String endpoint, {
     Map<String, dynamic>? body,
     String? token,
+    String? deviceSecret,
   }) async {
-    try {
-      final response = await _client.post(
+    return _send(
+      () => _client.post(
         Uri.parse(
           '${ApiEndpoints.baseUrl}$endpoint',
         ),
         headers: _headers(
           token: token,
+          deviceSecret: deviceSecret,
         ),
         body: jsonEncode(
           body ?? {},
         ),
-      );
-
-      return _handleResponse(response);
-    } catch (e) {
-      if (e is ApiException) {
-        rethrow;
-      }
-
-      throw const ApiException(
-        'Unable to connect to the Webs People server.',
-      );
-    }
+      ),
+    );
   }
+
+  // ============================================================
+  // PUT
+  // ============================================================
+
+  Future<dynamic> put(
+    String endpoint, {
+    Map<String, dynamic>? body,
+    String? token,
+    String? deviceSecret,
+  }) async {
+    return _send(
+      () => _client.put(
+        Uri.parse(
+          '${ApiEndpoints.baseUrl}$endpoint',
+        ),
+        headers: _headers(
+          token: token,
+          deviceSecret: deviceSecret,
+        ),
+        body: jsonEncode(
+          body ?? {},
+        ),
+      ),
+    );
+  }
+
+  // ============================================================
+  // DELETE
+  // ============================================================
 
   Future<dynamic> delete(
     String endpoint, {
     Map<String, dynamic>? body,
     String? token,
+    String? deviceSecret,
   }) async {
-    try {
-      final response = await _client.delete(
+    return _send(
+      () => _client.delete(
         Uri.parse(
           '${ApiEndpoints.baseUrl}$endpoint',
         ),
         headers: _headers(
           token: token,
+          deviceSecret: deviceSecret,
         ),
-        body: jsonEncode(
-          body ?? {},
+        body: body == null
+            ? null
+            : jsonEncode(body),
+      ),
+    );
+  }
+
+  // ============================================================
+  // MULTIPART FILE UPLOAD
+  // ============================================================
+
+  Future<dynamic> uploadFile(
+    String endpoint, {
+    required File file,
+    required String fieldName,
+    String? token,
+    String? deviceSecret,
+  }) async {
+    try {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse(
+          '${ApiEndpoints.baseUrl}$endpoint',
         ),
+      );
+
+      request.headers.addAll({
+        'Accept': 'application/json',
+
+        if (token != null && token.isNotEmpty)
+          'Authorization': 'Bearer $token',
+
+        if (deviceSecret != null &&
+            deviceSecret.isNotEmpty)
+          'X-Webs-Device-Secret': deviceSecret,
+      });
+
+      request.files.add(
+        await http.MultipartFile.fromPath(
+          fieldName,
+          file.path,
+        ),
+      );
+
+      final streamedResponse =
+          await request.send();
+
+      final response =
+          await http.Response.fromStream(
+        streamedResponse,
       );
 
       return _handleResponse(response);
@@ -109,28 +185,54 @@ class ApiClient {
       }
 
       throw const ApiException(
-        'Unable to connect to the Webs People server.',
+        'Unable to upload the profile photo.',
       );
     }
   }
+
+  // ============================================================
+  // SEND REQUEST (internal)
+  // ============================================================
+
+  Future<dynamic> _send(
+    Future<http.Response> Function() request,
+  ) async {
+    try {
+      final response = await request();
+
+      return _handleResponse(response);
+    } catch (e) {
+      if (e is ApiException) {
+        rethrow;
+      }
+
+      throw const ApiException(
+        'Unable to connect to the Webs server.',
+      );
+    }
+  }
+
+  // ============================================================
+  // RESPONSE HANDLER
+  // ============================================================
 
   dynamic _handleResponse(
     http.Response response,
   ) {
     dynamic data;
 
-    try {
-      data = jsonDecode(
-        response.body,
-      );
-    } catch (_) {
-      data = null;
+    if (response.body.isNotEmpty) {
+      try {
+        data = jsonDecode(
+          response.body,
+        );
+      } catch (_) {
+        data = response.body;
+      }
     }
 
-    if (
-      response.statusCode >= 200 &&
-      response.statusCode < 300
-    ) {
+    if (response.statusCode >= 200 &&
+        response.statusCode < 300) {
       return data ?? {};
     }
 
@@ -138,25 +240,24 @@ class ApiClient {
         'Something went wrong.';
 
     if (data is Map<String, dynamic>) {
-      if (data['message'] != null) {
+      if (data['message'] is String) {
         message =
-            data['message'].toString();
+            data['message'] as String;
       }
 
-      final errors =
-          data['errors'];
+      final errors = data['errors'];
 
       if (errors is Map<String, dynamic>) {
-        if (errors.isNotEmpty) {
-          final firstError =
-              errors.values.first;
+        for (final value
+            in errors.values) {
+          if (value is List &&
+              value.isNotEmpty) {
+            final first = value.first;
 
-          if (
-            firstError is List &&
-            firstError.isNotEmpty
-          ) {
-            message =
-                firstError.first.toString();
+            if (first is String) {
+              message = first;
+              break;
+            }
           }
         }
       }
@@ -164,7 +265,16 @@ class ApiClient {
 
     throw ApiException(
       message,
-      statusCode: response.statusCode,
+      statusCode:
+          response.statusCode,
     );
+  }
+
+  // ============================================================
+  // DISPOSE
+  // ============================================================
+
+  void dispose() {
+    _client.close();
   }
 }
