@@ -1,6 +1,6 @@
 class ApiEndpoints {
   static const String baseUrl =
-      'http://192.168.138.38:8001/api/v1';
+    'http://134.209.65.175/api/v1';
 
   static const String health =
       '/health';

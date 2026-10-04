@@ -48,7 +48,7 @@ class _MapScreenState extends State<MapScreen> {
   // Replace the value below with your actual API base URL.
   // It must match the base used by ApiClient / ApiEndpoints.
   //
- static const String _bgApiBase = 'http://192.168.138.38:8001/api/v1';
+ static const String _bgApiBase = 'http://134.209.65.175/api/v1';
 
   final MapController _mapController = MapController();
   final MapLocationService _locationService = MapLocationService();
