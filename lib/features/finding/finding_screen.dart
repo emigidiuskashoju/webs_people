@@ -29,6 +29,9 @@ class _FindingScreenState extends State<FindingScreen> {
   final DeviceHeartbeatService _heartbeatService = DeviceHeartbeatService();
   final LocationTrackingService _trackingService = LocationTrackingService();
 
+  /// Maximum GPS accuracy (in meters) we trust for display.
+  static const double _maxTrustedAccuracyMeters = 200.0;
+
   List<RecoveryDevice> _devices = [];
   RecoveryDevice? _selectedDevice;
 
@@ -48,6 +51,23 @@ class _FindingScreenState extends State<FindingScreen> {
       const Duration(seconds: 10),
       (_) => _reloadRecoveryDataSilently(),
     );
+  }
+
+  bool _isLocationTrustworthy(RecoveryDevice device) {
+    if (!device.hasLocation) return false;
+    final acc = device.accuracy;
+    if (acc == null) return true;
+    return acc <= _maxTrustedAccuracyMeters;
+  }
+
+  String _locationQualityLabel(RecoveryDevice device) {
+    if (!device.hasLocation) return 'No location';
+    final acc = device.accuracy;
+    if (acc == null) return 'Unknown quality';
+    if (acc <= 50) return 'Precise';
+    if (acc <= 200) return 'Good';
+    if (acc <= 1000) return 'Approximate';
+    return 'Very inaccurate';
   }
 
   Future<void> _loadDevices() async {
@@ -485,12 +505,10 @@ class _FindingScreenState extends State<FindingScreen> {
     );
   }
 
-  // ================================================================
-  // MAP CARD — with the heartbeat marker
-  // ================================================================
-
   Widget _buildMap(RecoveryDevice device) {
-    if (!device.hasLocation) {
+    final trusted = _isLocationTrustworthy(device);
+
+    if (!device.hasLocation || !trusted) {
       return Container(
         height: 320,
         decoration: BoxDecoration(
@@ -502,32 +520,44 @@ class _FindingScreenState extends State<FindingScreen> {
           ),
         ),
         child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.location_searching,
-                size: 60,
-                color: WebsColors.primaryGreen,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Waiting for device location...',
-                style: TextStyle(
-                  color: WebsColors.textLight(context),
-                  fontSize: 16,
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  trusted ? Icons.location_searching : Icons.gps_off,
+                  size: 60,
+                  color: trusted
+                      ? WebsColors.primaryGreen
+                      : Colors.orange.shade700,
                 ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Webs is requesting a fresh GPS location.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: WebsColors.textLight(context),
-                  fontSize: 12,
+                const SizedBox(height: 16),
+                Text(
+                  trusted
+                      ? 'Waiting for device location...'
+                      : 'Last known location is too inaccurate.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: WebsColors.textLight(context),
+                    fontSize: 16,
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 6),
+                Text(
+                  trusted
+                      ? 'Webs is requesting a fresh GPS location.'
+                      : 'The device\'s GPS fix is '
+                          '${device.accuracy?.toStringAsFixed(0) ?? '?'} m — '
+                          'it may be indoors or using cell-tower location.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: WebsColors.textLight(context),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       );
@@ -546,8 +576,6 @@ class _FindingScreenState extends State<FindingScreen> {
                 accuracy: device.accuracy,
               ),
             ),
-
-            // Red gradient strip along the bottom when in Lost Mode.
             if (device.isLost)
               Positioned(
                 left: 0,
@@ -572,10 +600,6 @@ class _FindingScreenState extends State<FindingScreen> {
       ),
     );
   }
-
-  // ================================================================
-  // LOCATION DETAILS CARD
-  // ================================================================
 
   Widget _buildLocationCard(RecoveryDevice device) {
     if (!device.hasLocation) {
@@ -631,6 +655,9 @@ class _FindingScreenState extends State<FindingScreen> {
       );
     }
 
+    final quality = _locationQualityLabel(device);
+    final trusted = _isLocationTrustworthy(device);
+
     return Container(
       decoration: BoxDecoration(
         color: WebsColors.surface(context),
@@ -652,8 +679,8 @@ class _FindingScreenState extends State<FindingScreen> {
           ),
           if (device.accuracy != null)
             _buildDetailRow(
-              Icons.gps_fixed,
-              'Accuracy',
+              trusted ? Icons.gps_fixed : Icons.gps_off,
+              'Accuracy ($quality)',
               '${device.accuracy!.toStringAsFixed(1)} m',
             ),
           if (device.locationRecordedAt != null)
@@ -762,10 +789,6 @@ class _FindingScreenState extends State<FindingScreen> {
       ),
     );
   }
-
-  // ================================================================
-  // REMOTE CONTROL
-  // ================================================================
 
   Widget _buildActions(RecoveryDevice device) {
     return Container(

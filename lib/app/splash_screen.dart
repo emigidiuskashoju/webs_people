@@ -17,7 +17,7 @@ class SplashScreen extends StatefulWidget {
     super.key,
     required this.onFinished,
     required this.themeMode,
-    this.minimumDuration = const Duration(milliseconds: 1200),
+    this.minimumDuration = const Duration(seconds: 2),
   });
 
   @override

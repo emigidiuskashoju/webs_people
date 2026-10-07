@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -262,7 +263,11 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
       final contacts =
           await _contactsService.getPhoneContacts();
+
       if (!mounted) return;
+
+      debugPrint('=== _loadContacts DEBUG ===');
+      debugPrint('Contacts loaded: ${contacts.length}');
 
       if (contacts.isEmpty) {
         setState(() {
@@ -279,8 +284,16 @@ class _ChatsScreenState extends State<ChatsScreen> {
       final phoneNumbers =
           contacts.map((c) => c.phoneNumber).toSet().toList();
 
+      debugPrint('Sending ${phoneNumbers.length} unique numbers to API');
+      debugPrint('First 5 to API: ${phoneNumbers.take(5).toList()}');
+
       final matchedUsers =
           await _matchService.matchPhoneNumbers(phoneNumbers);
+
+      debugPrint('Matched users from API: ${matchedUsers.length}');
+      for (final u in matchedUsers) {
+        debugPrint('  Matched: ${u.name} -> ${u.phoneNumber}');
+      }
 
       final matchedByPhone = <String, ContactMatchUser>{};
 
@@ -290,6 +303,8 @@ class _ChatsScreenState extends State<ChatsScreen> {
         if (normalized == null) continue;
         matchedByPhone[normalized] = user;
       }
+
+      debugPrint('matchedByPhone keys: ${matchedByPhone.keys.toList()}');
 
       final registered = <PhoneContact>[];
       final invites = <PhoneContact>[];
@@ -301,6 +316,9 @@ class _ChatsScreenState extends State<ChatsScreen> {
           invites.add(contact);
         }
       }
+
+      debugPrint('Registered: ${registered.length}');
+      debugPrint('Invites: ${invites.length}');
 
       final summaries =
           await _chatRepository.getConversationSummaries(
@@ -511,26 +529,23 @@ class _ChatsScreenState extends State<ChatsScreen> {
     );
   }
 
- Future<void> _switchAccount(SavedAccount account) async {
-  try {
-    // Switch account properly: this stops tracking, tears down
-    // the old heartbeat, saves the new token, re-registers this
-    // phone under the new account, and re-registers FCM.
-    await _authService.switchAccount(account.token);
+  Future<void> _switchAccount(SavedAccount account) async {
+    try {
+      await _authService.switchAccount(account.token);
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(
-        builder: (_) => const MainNavigationScreen(),
-      ),
-      (route) => false,
-    );
-  } catch (e) {
-    if (!mounted) return;
-    _showMessage('Could not switch account.');
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => const MainNavigationScreen(),
+        ),
+        (route) => false,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _showMessage('Could not switch account.');
+    }
   }
-}
 
   // ============================================================
   // BODY

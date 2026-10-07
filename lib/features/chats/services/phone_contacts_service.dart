@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 
 import '../models/phone_contact.dart';
@@ -13,6 +14,9 @@ class PhoneContactsService {
       PermissionType.read,
     );
 
+    debugPrint('=== CONTACTS DEBUG ===');
+    debugPrint('Permission status: $permissionStatus');
+
     if (permissionStatus != PermissionStatus.granted) {
       throw Exception(
         'Contacts permission was not granted.',
@@ -26,12 +30,17 @@ class PhoneContactsService {
       },
     );
 
+    debugPrint('Total contacts read from device: ${contacts.length}');
+
     final results = <PhoneContact>[];
+    var skippedNoPhone = 0;
+    var skippedBadNumber = 0;
 
     for (final contact in contacts) {
       final name = (contact.displayName ?? '').trim();
 
       if (contact.phones.isEmpty) {
+        skippedNoPhone++;
         continue;
       }
 
@@ -39,6 +48,8 @@ class PhoneContactsService {
         final normalized = normalizePhoneNumber(phone.number);
 
         if (normalized == null) {
+          skippedBadNumber++;
+          debugPrint('  Skipped invalid: "$name" -> "${phone.number}"');
           continue;
         }
 
@@ -51,19 +62,23 @@ class PhoneContactsService {
       }
     }
 
-    return _removeDuplicates(results);
+    debugPrint('Skipped (no phone): $skippedNoPhone');
+    debugPrint('Skipped (invalid number): $skippedBadNumber');
+    debugPrint('Valid contacts before dedup: ${results.length}');
+
+    final deduped = _removeDuplicates(results);
+    debugPrint('After dedup: ${deduped.length}');
+
+    if (deduped.isNotEmpty) {
+      debugPrint('Sample (first 10):');
+      for (final c in deduped.take(10)) {
+        debugPrint('  ${c.name} -> ${c.phoneNumber}');
+      }
+    }
+
+    return deduped;
   }
 
-  /// Normalizes a raw phone number to the E.164 format `+<country><number>`.
-  ///
-  /// Handles:
-  ///   - `+255629187797`  -> `+255629187797`
-  ///   - `00255629187797` -> `+255629187797`
-  ///   - `0629187797`     -> `+255629187797`  (local, prepends default country)
-  ///   - `255629187797`   -> `+255629187797`  (country code without `+`)
-  ///   - `(062) 918-7797` -> `+255629187797`
-  ///
-  /// Returns `null` if the number is invalid.
   String? normalizePhoneNumber(String value) {
     var phone = value.trim();
 
@@ -71,22 +86,17 @@ class PhoneContactsService {
       return null;
     }
 
-    // Strip spaces, dashes, parentheses, dots.
     phone = phone.replaceAll(RegExp(r'[\s\-\(\)\.]'), '');
 
-    // Convert 00 prefix to +.
     if (phone.startsWith('00')) {
       phone = '+${phone.substring(2)}';
     }
 
-    // Local format: 0XXXXXXXXX -> +<country>XXXXXXXXX
     if (phone.startsWith('0')) {
       phone = '+$_defaultCountryCode${phone.substring(1)}';
     }
 
-    // Country code without +: e.g. 255629187797 -> +255629187797
     if (!phone.startsWith('+')) {
-      // Only treat it as a country-coded number if it looks long enough.
       if (RegExp(r'^\d{10,15}$').hasMatch(phone)) {
         phone = '+$phone';
       } else {

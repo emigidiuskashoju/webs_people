@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../../core/map/mapbox_tile_layer.dart';
+
 class RecoveryMap extends StatefulWidget {
   final double latitude;
   final double longitude;
@@ -41,15 +43,7 @@ class _RecoveryMapState extends State<RecoveryMap>
     super.dispose();
   }
 
-  /// Double-beat heartbeat: two quick pulses then a pause.
-  /// Returns a value from 0.0 to 1.0 that we use to scale the
-  /// ripple rings and the centre dot.
   double _heartbeatCurve(double t) {
-    // Two beats per cycle.
-    // Beat 1: 0.00 → 0.15
-    // Pause : 0.15 → 0.30
-    // Beat 2: 0.30 → 0.45
-    // Pause : 0.45 → 1.00 (rest)
     if (t < 0.15) {
       return Curves.easeOut.transform(t / 0.15);
     } else if (t < 0.30) {
@@ -77,12 +71,8 @@ class _RecoveryMapState extends State<RecoveryMap>
             ),
           ),
           children: [
-            TileLayer(
-              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.webspeople.app',
-            ),
+            MapboxTileLayer.streets(),
 
-            // Accuracy circle (soft red glow behind the marker)
             if (widget.accuracy != null && widget.accuracy! > 0)
               CircleLayer(
                 circles: [
@@ -97,7 +87,6 @@ class _RecoveryMapState extends State<RecoveryMap>
                 ],
               ),
 
-            // The heartbeat marker
             MarkerLayer(
               markers: [
                 Marker(
@@ -117,7 +106,6 @@ class _RecoveryMapState extends State<RecoveryMap>
           ],
         ),
 
-        // Small "LIVE" badge in the top-right corner for context.
         Positioned(
           top: 8,
           right: 8,
@@ -167,8 +155,6 @@ class _RecoveryMapState extends State<RecoveryMap>
   }
 }
 
-/// The marker itself — a red pin with expanding ripple rings
-/// driven by the beat value (0.0 → 1.0).
 class _HeartbeatMarker extends StatelessWidget {
   final double beat;
 
@@ -182,19 +168,14 @@ class _HeartbeatMarker extends StatelessWidget {
     return Stack(
       alignment: Alignment.center,
       children: [
-        // Outer ripple — larger, softer, always expanding.
         _ripple(
           size: 100 + (beat * 20),
           opacity: 0.18 * (1.0 - beat * 0.5),
         ),
-
-        // Mid ripple — tracks the beat closer.
         _ripple(
           size: 60 + (beat * 30),
           opacity: 0.35 * (1.0 - beat * 0.6),
         ),
-
-        // Inner ring — solid, bright, doesn't scale much.
         Container(
           width: 40 + (beat * 8),
           height: 40 + (beat * 8),
@@ -207,8 +188,6 @@ class _HeartbeatMarker extends StatelessWidget {
             ),
           ),
         ),
-
-        // Heart of the marker — solid red disc with white border.
         Container(
           width: 22,
           height: 22,
@@ -228,8 +207,6 @@ class _HeartbeatMarker extends StatelessWidget {
             ],
           ),
         ),
-
-        // Tiny glossy highlight for depth.
         Positioned(
           top: 6,
           child: Container(

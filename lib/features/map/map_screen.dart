@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import '../../core/background/background_location_service.dart';
+import '../../core/map/mapbox_tile_layer.dart';
 import '../../core/storage/auth_storage.dart';
 import '../../core/theme/webs_colors.dart';
 import 'models/route_point.dart';
@@ -41,14 +42,12 @@ class MapScreen extends StatefulWidget {
 }
 
 class _MapScreenState extends State<MapScreen> {
-  // ==================================================================
-  // BACKEND API BASE — used by the background service
-  // ==================================================================
-  //
-  // Replace the value below with your actual API base URL.
-  // It must match the base used by ApiClient / ApiEndpoints.
-  //
- static const String _bgApiBase = 'http://134.209.65.175/api/v1';
+  static const String _bgApiBase = 'http://134.209.65.175/api/v1';
+
+  /// Maximum GPS accuracy (in meters) we consider usable.
+  /// Anything worse is rejected to avoid uploading cell-tower
+  /// positions that are hundreds of kilometers off.
+  static const double _maxAcceptableAccuracyMeters = 100.0;
 
   final MapController _mapController = MapController();
   final MapLocationService _locationService = MapLocationService();
@@ -58,7 +57,6 @@ class _MapScreenState extends State<MapScreen> {
   final PlaceRoutingService _placeRoutingService = PlaceRoutingService();
   final TextEditingController _codeController = TextEditingController();
 
-  // ===== Place search =====
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocus = FocusNode();
 
@@ -74,7 +72,6 @@ class _MapScreenState extends State<MapScreen> {
 
   Timer? _destinationRecalcTimer;
 
-  // ===== Tickers =====
   LocationTickerData _tickerData = const LocationTickerData();
   Timer? _reverseGeocodeTimer;
   String? _lastTickerPlaceLabel;
@@ -83,14 +80,11 @@ class _MapScreenState extends State<MapScreen> {
   Timer? _otherReverseGeocodeTimer;
   String? _lastOtherTickerPlaceLabel;
 
-  // ===== Other-user polling =====
   Timer? _otherLocationPollTimer;
   DateTime? _lastOtherFetchAt;
 
-  // ===== Freshness badge refresh =====
   Timer? _freshnessTickTimer;
 
-  // ===== State =====
   StreamSubscription<Position>? _locationSubscription;
   LatLng? _currentLocation;
   LatLng? _otherLocation;
@@ -176,10 +170,6 @@ class _MapScreenState extends State<MapScreen> {
     super.dispose();
   }
 
-  // ==================================================================
-  // INITIALIZATION
-  // ==================================================================
-
   Future<void> _initialize() async {
     if (!mounted) return;
 
@@ -240,10 +230,13 @@ class _MapScreenState extends State<MapScreen> {
     setState(() => _currentLocation = location);
     _updateTickerFromPosition(position);
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _mapController.move(location, 16);
-    });
+    // Only move the camera if the fix is decent.
+    if (position.accuracy <= _maxAcceptableAccuracyMeters) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _mapController.move(location, 16);
+      });
+    }
 
     _refreshTickerPlaceLabel();
   }
@@ -268,6 +261,17 @@ class _MapScreenState extends State<MapScreen> {
     final request = _activeRequest;
     if (request == null || !request.isAccepted) return;
 
+    // Reject poor GPS fixes. Cell-tower fallback often reports
+    // accuracy in the thousands of meters — uploading those would
+    // put the other person on the wrong side of the country.
+    if (position.accuracy > _maxAcceptableAccuracyMeters) {
+      debugPrint(
+        'GPS: skipping upload — accuracy=${position.accuracy.toStringAsFixed(1)}m '
+        '(limit ${_maxAcceptableAccuracyMeters}m)',
+      );
+      return;
+    }
+
     try {
       await _requestService
           .updateLocation(
@@ -280,27 +284,14 @@ class _MapScreenState extends State<MapScreen> {
     } catch (_) {}
   }
 
-  // ==================================================================
-  // BACKGROUND SERVICE STARTER
-  // ==================================================================
-  //
-  // Called once the location request becomes "accepted".
-  //
-  // This starts a native foreground service that keeps
-  // uploading the user's location even after the app is
-  // closed, as long as the phone has internet.
-
   Future<void> _startBackgroundUploads({required int requestId}) async {
     try {
       final token = await AuthStorage().getToken();
       if (token == null || token.isEmpty) return;
 
-      // Ask for background permission first (Android 10+).
       final currentPermission = await Geolocator.checkPermission();
 
       if (currentPermission == LocationPermission.whileInUse) {
-        // The user granted "while using the app" but not
-        // "always". Request the stronger permission.
         await Geolocator.requestPermission();
       }
 
@@ -315,10 +306,6 @@ class _MapScreenState extends State<MapScreen> {
       debugPrint('BG: failed to start: $e');
     }
   }
-
-  // ==================================================================
-  // TICKERS
-  // ==================================================================
 
   void _updateTickerFromPosition(Position position) {
     setState(() {
@@ -403,10 +390,6 @@ class _MapScreenState extends State<MapScreen> {
     });
   }
 
-  // ==================================================================
-  // POLL THE OTHER PERSON'S LOCATION
-  // ==================================================================
-
   Future<void> _pollOtherLocation() async {
     if (!mounted) return;
 
@@ -443,10 +426,6 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  // ==================================================================
-  // FRESHNESS HELPERS
-  // ==================================================================
-
   Duration? get _otherStaleness {
     final updated = _otherLocationUpdatedAt;
     if (updated == null) return null;
@@ -468,10 +447,6 @@ class _MapScreenState extends State<MapScreen> {
     if (d.inHours < 24) return Colors.red.shade700;
     return Colors.grey.shade700;
   }
-
-  // ==================================================================
-  // PLACE SEARCH
-  // ==================================================================
 
   void _onSearchQueryChanged(String query) {
     _placeSearchService.searchDebounced(
@@ -629,10 +604,6 @@ class _MapScreenState extends State<MapScreen> {
     });
   }
 
-  // ==================================================================
-  // CONVERSATION LOCATION REQUEST
-  // ==================================================================
-
   Future<void> _loadConversationRequest() async {
     try {
       final requests = await _requestService
@@ -666,13 +637,7 @@ class _MapScreenState extends State<MapScreen> {
       _updateOtherTicker();
 
       if (active.isAccepted) {
-        // --------------------------------------------------------
-        // Start the native background service. From this point on,
-        // the phone will keep uploading its location even if the
-        // user closes the app.
-        // --------------------------------------------------------
         await _startBackgroundUploads(requestId: active.id);
-
         await _refreshOtherLocation();
         await _loadSharedCustomRoute();
       }
@@ -813,10 +778,6 @@ class _MapScreenState extends State<MapScreen> {
       if (mounted) setState(() => _routeLoading = false);
     }
   }
-
-  // ==================================================================
-  // CUSTOM ROUTE
-  // ==================================================================
 
   Future<void> _loadSharedCustomRoute({bool silent = false}) async {
     final request = _activeRequest;
@@ -1023,10 +984,6 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  // ==================================================================
-  // MARKERS
-  // ==================================================================
-
   Widget _buildCurrentLocationMarker() {
     return const Icon(Icons.my_location, size: 38, color: Colors.blue);
   }
@@ -1102,10 +1059,6 @@ class _MapScreenState extends State<MapScreen> {
       ),
     );
   }
-
-  // ==================================================================
-  // INFO PANEL
-  // ==================================================================
 
   Widget _buildInfoPanel() {
     return DraggableScrollableSheet(
@@ -1813,10 +1766,6 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  // ==================================================================
-  // BUILD
-  // ==================================================================
-
   @override
   Widget build(BuildContext context) {
     const double tickerHeight = 30.0;
@@ -1856,11 +1805,7 @@ class _MapScreenState extends State<MapScreen> {
                 },
               ),
               children: [
-                TileLayer(
-                  urlTemplate:
-                      'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.webspeople.app',
-                ),
+                MapboxTileLayer.streets(),
 
                 if (_routeGeometry.length >= 2)
                   PolylineLayer(
@@ -1930,12 +1875,6 @@ class _MapScreenState extends State<MapScreen> {
                         child: _buildRoutePointMarker(point.order),
                       ),
                     ),
-                  ],
-                ),
-
-                RichAttributionWidget(
-                  attributions: [
-                    TextSourceAttribution('OpenStreetMap contributors'),
                   ],
                 ),
               ],

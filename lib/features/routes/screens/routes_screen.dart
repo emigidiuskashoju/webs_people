@@ -4,6 +4,7 @@ import 'package:latlong2/latlong.dart';
 
 import '/core/theme/webs_colors.dart';
 import '../../location/services/location_service.dart';
+import '/core/map/mapbox_tile_layer.dart';
 
 class RoutesScreen extends StatefulWidget {
   const RoutesScreen({super.key});
@@ -88,10 +89,7 @@ class _RoutesScreenState extends State<RoutesScreen> {
               initialZoom: 13,
             ),
             children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.webs.people',
-              ),
+              MapboxTileLayer.streets(),
               if (_currentLocation != null)
                 MarkerLayer(
                   markers: [
