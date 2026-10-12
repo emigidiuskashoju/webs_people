@@ -118,8 +118,7 @@ class DeviceCommandService {
       deviceSecret: secret,
       body: {
         'status': status,
-        if (errorMessage != null)
-          'error_message': errorMessage,
+        'error_message': ?errorMessage,
       },
     );
 

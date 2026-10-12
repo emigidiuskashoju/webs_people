@@ -3,17 +3,20 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../core/map/mapbox_tile_layer.dart';
+import '../map/widgets/photo_marker.dart';
 
 class RecoveryMap extends StatefulWidget {
   final double latitude;
   final double longitude;
   final double? accuracy;
+  final String? deviceName;
 
   const RecoveryMap({
     super.key,
     required this.latitude,
     required this.longitude,
     this.accuracy,
+    this.deviceName,
   });
 
   @override
@@ -27,6 +30,7 @@ class _RecoveryMapState extends State<RecoveryMap>
 
   static const Color _heartbeatRed = Color(0xFFE53935);
   static const Color _heartbeatRedDeep = Color(0xFFB71C1C);
+  static const Color _heartbeatFill = Color(0xFFFFEBEE);
 
   @override
   void initState() {
@@ -51,7 +55,8 @@ class _RecoveryMapState extends State<RecoveryMap>
     } else if (t < 0.45) {
       return Curves.easeOut.transform((t - 0.30) / 0.15);
     } else {
-      return (1.0 - Curves.easeIn.transform((t - 0.45) / 0.55)).clamp(0.0, 1.0);
+      return (1.0 - Curves.easeIn.transform((t - 0.45) / 0.55))
+          .clamp(0.0, 1.0);
     }
   }
 
@@ -91,14 +96,39 @@ class _RecoveryMapState extends State<RecoveryMap>
               markers: [
                 Marker(
                   point: center,
-                  width: 120,
-                  height: 120,
-                  child: AnimatedBuilder(
-                    animation: _pulseController,
-                    builder: (context, _) {
-                      final beat = _heartbeatCurve(_pulseController.value);
-                      return _HeartbeatMarker(beat: beat);
-                    },
+                  width: 70,
+                  height: 90,
+                  alignment: Alignment.topCenter,
+                  child: Stack(
+                    alignment: Alignment.topCenter,
+                    children: [
+                      // Animated heartbeat rings behind the marker
+                      Positioned(
+                        top: 0,
+                        child: AnimatedBuilder(
+                          animation: _pulseController,
+                          builder: (context, _) {
+                            final beat = _heartbeatCurve(
+                              _pulseController.value,
+                            );
+                            return _HeartbeatRings(beat: beat);
+                          },
+                        ),
+                      ),
+
+                      // Photo marker with red ring
+                      Positioned(
+                        top: 0,
+                        child: PhotoMarker(
+                          photoUrl: null,
+                          fallbackInitial:
+                              widget.deviceName ?? 'D',
+                          ringColor: _heartbeatRed,
+                          fillColor: _heartbeatFill,
+                          size: 50,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -155,70 +185,31 @@ class _RecoveryMapState extends State<RecoveryMap>
   }
 }
 
-class _HeartbeatMarker extends StatelessWidget {
+class _HeartbeatRings extends StatelessWidget {
   final double beat;
 
-  const _HeartbeatMarker({required this.beat});
+  const _HeartbeatRings({required this.beat});
 
   static const Color _red = Color(0xFFE53935);
-  static const Color _redDeep = Color(0xFFB71C1C);
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        _ripple(
-          size: 100 + (beat * 20),
-          opacity: 0.18 * (1.0 - beat * 0.5),
-        ),
-        _ripple(
-          size: 60 + (beat * 30),
-          opacity: 0.35 * (1.0 - beat * 0.6),
-        ),
-        Container(
-          width: 40 + (beat * 8),
-          height: 40 + (beat * 8),
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: _red.withValues(alpha: 0.25),
-            border: Border.all(
-              color: _red.withValues(alpha: 0.6),
-              width: 2,
-            ),
+    return SizedBox(
+      width: 120,
+      height: 120,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          _ripple(
+            size: 100 + (beat * 20),
+            opacity: 0.18 * (1.0 - beat * 0.5),
           ),
-        ),
-        Container(
-          width: 22,
-          height: 22,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: _red,
-            border: Border.all(
-              color: Colors.white,
-              width: 3,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: _redDeep.withValues(alpha: 0.55),
-                blurRadius: 10,
-                spreadRadius: 2,
-              ),
-            ],
+          _ripple(
+            size: 70 + (beat * 30),
+            opacity: 0.35 * (1.0 - beat * 0.6),
           ),
-        ),
-        Positioned(
-          top: 6,
-          child: Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.9),
-              shape: BoxShape.circle,
-            ),
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 

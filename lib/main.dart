@@ -26,6 +26,7 @@ final GlobalKey<NavigatorState> websNavigatorKey =
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Firebase MUST be ready before the app starts.
   try {
     await Firebase.initializeApp();
     debugPrint('FIREBASE: initialised');
@@ -33,7 +34,20 @@ Future<void> main() async {
     debugPrint('FIREBASE: initialisation failed: $e');
   }
 
-  await NotificationService.instance.initialize();
+  // Show the app IMMEDIATELY.
+  runApp(const WebsApp());
+
+  // Initialise the rest in the background.
+  unawaited(_initializeBackgroundServices());
+}
+
+/// Runs after the app is visible. Nothing here blocks UI.
+Future<void> _initializeBackgroundServices() async {
+  try {
+    await NotificationService.instance.initialize();
+  } catch (e) {
+    debugPrint('NOTIF: initialisation failed: $e');
+  }
 
   try {
     await FcmService.instance.initialize();
@@ -53,11 +67,6 @@ Future<void> main() async {
     debugPrint('LOCATION-LISTENER: initialisation failed: $e');
   }
 
-  // ------------------------------------------------------------------
-  // Background location service
-  // ------------------------------------------------------------------
-  // Configures the native service but does NOT start it. Starting
-  // happens when a location-sharing request is accepted.
   try {
     await BackgroundLocationService.instance.initialize();
     debugPrint('BG-SERVICE: initialised');
@@ -65,9 +74,7 @@ Future<void> main() async {
     debugPrint('BG-SERVICE: initialisation failed: $e');
   }
 
-  runApp(
-    const WebsApp(),
-  );
+  debugPrint('STARTUP: all background services initialised');
 }
 
 class WebsApp extends StatefulWidget {
@@ -129,7 +136,7 @@ class _WebsAppState extends State<WebsApp> {
   }
 
   Future<void> _preloadChats() async {
-    final data = await _contactPreloader.load();
+    final data = await _contactPreloader.loadFromCacheOnly();
     if (!mounted) return;
     setState(() => _preloadedChats = data);
   }
@@ -312,7 +319,6 @@ class _WebsAppState extends State<WebsApp> {
   bool get _readyForApp =>
       _splashDone &&
       _appearanceLoaded &&
-      _preloadedChats != null &&
       _tokenLoaded;
 
   @override
@@ -398,7 +404,7 @@ class _WebsAppState extends State<WebsApp> {
       return SplashScreen(
         onFinished: _onSplashFinished,
         themeMode: _themeMode,
-        minimumDuration: const Duration(milliseconds: 25200),
+        minimumDuration: const Duration(milliseconds: 1000),
       );
     }
 
@@ -413,7 +419,7 @@ class WebsThemeScope extends InheritedWidget {
   final ThemeMode themeMode;
   final ValueChanged<ThemeMode> onThemeModeChanged;
 
-  const WebsThemeScope({
+  const WebsThemeScope({super.key, 
     required this.themeMode,
     required this.onThemeModeChanged,
     required super.child,

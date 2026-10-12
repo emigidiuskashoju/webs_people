@@ -9,6 +9,7 @@ import '../../../core/storage/auth_storage.dart';
 import '../../../core/storage/saved_account_storage.dart';
 import '../../devices/services/device_service.dart';
 import '../../location/services/location_tracking_service.dart';
+import '../../chats/services/contacts_cache_service.dart';
 
 class AuthService {
   final ApiClient _apiClient;
@@ -319,6 +320,8 @@ class AuthService {
 
   Future<void> logout() async {
     final token = await _storage.getToken();
+    await ContactsCacheService().clear();
+
 
     if (token != null && token.isNotEmpty) {
       try {

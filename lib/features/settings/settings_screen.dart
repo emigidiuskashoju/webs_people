@@ -128,7 +128,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             value: _locationSharingEnabled,
             onChanged: _setLocationSharing,
-            activeColor: WebsColors.primaryGreen,
+            activeThumbColor: WebsColors.primaryGreen,
           ),
           _buildSettingsTile(
             icon: Icons.lock_outline,
@@ -149,7 +149,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             value: _notificationsEnabled,
             onChanged: _notificationsLoading ? null : _setNotifications,
-            activeColor: WebsColors.primaryGreen,
+            activeThumbColor: WebsColors.primaryGreen,
           ),
           _buildSettingsTile(
             icon: Icons.call_outlined,

@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -16,7 +15,7 @@ import 'data/chat_repository.dart';
 import 'models/phone_contact.dart';
 import 'models/preloaded_chats_data.dart';
 import 'services/contact_match_service.dart';
-import 'services/phone_contacts_service.dart';
+import 'services/contact_preloader.dart';
 
 class ChatsScreen extends StatefulWidget {
   final PreloadedChatsData? preloaded;
@@ -29,16 +28,17 @@ class ChatsScreen extends StatefulWidget {
   @override
   State<ChatsScreen> createState() => _ChatsScreenState();
 }
-
+ 
 class _ChatsScreenState extends State<ChatsScreen> {
-  final PhoneContactsService _contactsService = PhoneContactsService();
-  final ContactMatchService _matchService = ContactMatchService();
+
   final AuthService _authService = AuthService();
   final SavedAccountStorage _savedAccountStorage = SavedAccountStorage();
   final AuthStorage _authStorage = AuthStorage();
   final ChatRepository _chatRepository = ChatRepository();
   final LocationRequestService _locationRequestService =
       LocationRequestService();
+   final ContactPreloader _preloader = ContactPreloader();
+  bool _backgroundRefreshRunning = false;
 
   final TextEditingController _searchController = TextEditingController();
 
@@ -240,7 +240,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
     return id;
   }
 
-  Future<void> _loadContacts() async {
+    Future<void> _loadContacts() async {
     if (mounted) {
       setState(() {
         _isLoading = true;
@@ -250,133 +250,39 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
     try {
       await _ensureCurrentUserId();
-
       final currentUserId = _currentUserId!;
 
-      try {
-        await _chatRepository.receivePendingMessages(
-          currentUserId: currentUserId,
-        );
-      } catch (_) {}
-
-      await _refreshPendingLocationRequests(silent: true);
-
-      final contacts =
-          await _contactsService.getPhoneContacts();
-
-      if (!mounted) return;
-
-      debugPrint('=== _loadContacts DEBUG ===');
-      debugPrint('Contacts loaded: ${contacts.length}');
-
-      if (contacts.isEmpty) {
+      // 1. Instant — show cached data
+      final cached = await _preloader.loadFromCacheOnly();
+      if (mounted && cached.allContacts.isNotEmpty) {
         setState(() {
-          _allContacts = [];
-          _registeredContacts = [];
-          _inviteContacts = [];
-          _matchedUsersByPhone = {};
-          _summaries = {};
+          _currentUserId = cached.currentUserId == 0
+              ? currentUserId
+              : cached.currentUserId;
+          _allContacts = cached.allContacts;
+          _registeredContacts = cached.registeredContacts;
+          _inviteContacts = cached.inviteContacts;
+          _matchedUsersByPhone = cached.matchedUsersByPhone;
+          _pendingLocationUserIds =
+              cached.pendingLocationRequestUserIds;
           _isLoading = false;
         });
-        return;
       }
 
-      final phoneNumbers =
-          contacts.map((c) => c.phoneNumber).toSet().toList();
+      // 2. Determine whether a refresh is needed
+      final stale = await _preloader.isCacheStale();
 
-      debugPrint('Sending ${phoneNumbers.length} unique numbers to API');
-      debugPrint('First 5 to API: ${phoneNumbers.take(5).toList()}');
-
-      final matchedUsers =
-          await _matchService.matchPhoneNumbers(phoneNumbers);
-
-      debugPrint('Matched users from API: ${matchedUsers.length}');
-      for (final u in matchedUsers) {
-        debugPrint('  Matched: ${u.name} -> ${u.phoneNumber}');
+      if (stale || cached.allContacts.isEmpty) {
+        // Refresh (foreground on first load, background otherwise)
+        await _runBackgroundRefresh(silent: cached.allContacts.isEmpty ? false : true);
+      } else if (mounted) {
+        setState(() => _isLoading = false);
       }
 
-      final matchedByPhone = <String, ContactMatchUser>{};
-
-      for (final user in matchedUsers) {
-        final normalized =
-            _contactsService.normalizePhoneNumber(user.phoneNumber);
-        if (normalized == null) continue;
-        matchedByPhone[normalized] = user;
+      // 3. Refresh conversation summaries (fast)
+      if (mounted) {
+        await _loadSummariesAndPending();
       }
-
-      debugPrint('matchedByPhone keys: ${matchedByPhone.keys.toList()}');
-
-      final registered = <PhoneContact>[];
-      final invites = <PhoneContact>[];
-
-      for (final contact in contacts) {
-        if (matchedByPhone.containsKey(contact.phoneNumber)) {
-          registered.add(contact);
-        } else {
-          invites.add(contact);
-        }
-      }
-
-      debugPrint('Registered: ${registered.length}');
-      debugPrint('Invites: ${invites.length}');
-
-      final summaries =
-          await _chatRepository.getConversationSummaries(
-        currentUserId: currentUserId,
-      );
-
-      if (!mounted) return;
-
-      registered.sort((a, b) {
-        final userA = matchedByPhone[a.phoneNumber];
-        final userB = matchedByPhone[b.phoneNumber];
-
-        DateTime? lastA;
-        DateTime? lastB;
-
-        if (userA != null) {
-          final convId = _chatRepository.createConversationId(
-            currentUserId,
-            userA.id,
-          );
-          lastA = summaries[convId]?.lastMessageAt;
-        }
-
-        if (userB != null) {
-          final convId = _chatRepository.createConversationId(
-            currentUserId,
-            userB.id,
-          );
-          lastB = summaries[convId]?.lastMessageAt;
-        }
-
-        if (lastA != null && lastB == null) return -1;
-        if (lastA == null && lastB != null) return 1;
-
-        if (lastA != null && lastB != null) {
-          final byTime = lastB.compareTo(lastA);
-          if (byTime != 0) return byTime;
-        }
-
-        return a.name
-            .toLowerCase()
-            .compareTo(b.name.toLowerCase());
-      });
-
-      invites.sort((a, b) => a.name
-          .toLowerCase()
-          .compareTo(b.name.toLowerCase()));
-
-      if (!mounted) return;
-
-      setState(() {
-        _allContacts = contacts;
-        _registeredContacts = registered;
-        _inviteContacts = invites;
-        _matchedUsersByPhone = matchedByPhone;
-        _summaries = summaries;
-        _isLoading = false;
-      });
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -384,6 +290,56 @@ class _ChatsScreenState extends State<ChatsScreen> {
         _errorMessage = e.toString();
       });
     }
+  }
+
+  /// Runs the slow refresh (reads phone contacts + server
+  /// matching). Updates the UI when done.
+  ///
+  /// If [silent] is true, we don't show the loading spinner —
+  /// the user sees cached data while this runs in the
+  /// background.
+  Future<void> _runBackgroundRefresh({bool silent = true}) async {
+    if (_backgroundRefreshRunning) return;
+    _backgroundRefreshRunning = true;
+
+    try {
+      final fresh = await _preloader.refresh();
+
+      if (!mounted) return;
+
+      setState(() {
+        if (fresh.currentUserId != 0) {
+          _currentUserId = fresh.currentUserId;
+        }
+        _allContacts = fresh.allContacts;
+        _registeredContacts = fresh.registeredContacts;
+        _inviteContacts = fresh.inviteContacts;
+        _matchedUsersByPhone = fresh.matchedUsersByPhone;
+        _pendingLocationUserIds =
+            fresh.pendingLocationRequestUserIds;
+        _errorMessage = fresh.errorMessage;
+        _isLoading = false;
+      });
+
+      if (mounted) {
+        await _loadSummariesAndPending();
+      }
+    } catch (e) {
+      if (mounted && !silent) {
+        setState(() {
+          _errorMessage = e.toString();
+          _isLoading = false;
+        });
+      }
+    } finally {
+      _backgroundRefreshRunning = false;
+    }
+  }
+
+  /// Called by pull-to-refresh — always forces a full refresh.
+  Future<void> _forceRefresh() async {
+    if (_backgroundRefreshRunning) return;
+    await _runBackgroundRefresh(silent: false);
   }
 
   // ============================================================
@@ -665,7 +621,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
         Expanded(
           child: RefreshIndicator(
             color: WebsColors.primaryGreen,
-            onRefresh: _loadContacts,
+            onRefresh: _forceRefresh,
             child: ListView.builder(
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(20, 4, 20, 32),

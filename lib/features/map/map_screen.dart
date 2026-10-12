@@ -12,6 +12,7 @@ import '../../core/background/background_location_service.dart';
 import '../../core/map/mapbox_tile_layer.dart';
 import '../../core/storage/auth_storage.dart';
 import '../../core/theme/webs_colors.dart';
+import '../auth/services/auth_service.dart';
 import 'models/route_point.dart';
 import 'models/location_request.dart';
 import 'models/custom_route.dart';
@@ -23,18 +24,23 @@ import 'services/custom_route_service.dart';
 import 'services/place_search_service.dart';
 import 'services/place_routing_service.dart';
 import 'widgets/location_ticker.dart';
+import 'widgets/photo_marker.dart';
 import 'widgets/place_search_card.dart';
 
 class MapScreen extends StatefulWidget {
   final int currentUserId;
   final int userId;
   final String name;
+  final String? currentUserPhotoUrl;
+  final String? otherUserPhotoUrl;
 
   const MapScreen({
     super.key,
     required this.currentUserId,
     required this.userId,
     required this.name,
+    this.currentUserPhotoUrl,
+    this.otherUserPhotoUrl,
   });
 
   @override
@@ -44,10 +50,9 @@ class MapScreen extends StatefulWidget {
 class _MapScreenState extends State<MapScreen> {
   static const String _bgApiBase = 'http://134.209.65.175/api/v1';
 
-  /// Maximum GPS accuracy (in meters) we consider usable.
-  /// Anything worse is rejected to avoid uploading cell-tower
-  /// positions that are hundreds of kilometers off.
   static const double _maxAcceptableAccuracyMeters = 100.0;
+  static const double _offRouteThresholdMeters = 40.0;
+  static const Duration _offRouteGracePeriod = Duration(seconds: 3);
 
   final MapController _mapController = MapController();
   final MapLocationService _locationService = MapLocationService();
@@ -69,6 +74,9 @@ class _MapScreenState extends State<MapScreen> {
   double? _destinationRemainingMeters;
   double? _destinationRemainingSeconds;
   LatLng? _lastRouteOrigin;
+
+  DateTime? _offRouteSince;
+  bool _routeRecalculating = false;
 
   Timer? _destinationRecalcTimer;
 
@@ -94,6 +102,8 @@ class _MapScreenState extends State<MapScreen> {
   bool _requesting = false;
   bool _refreshingOther = false;
   String? _error;
+
+  String? _currentUserPhotoUrl;
 
   String? _dailyCode;
   DateTime? _dailyCodeExpiresAt;
@@ -125,7 +135,7 @@ class _MapScreenState extends State<MapScreen> {
     );
 
     _destinationRecalcTimer = Timer.periodic(
-      const Duration(seconds: 5),
+      const Duration(seconds: 2),
       (_) => _maybeRecalcDestinationRoute(),
     );
 
@@ -167,6 +177,8 @@ class _MapScreenState extends State<MapScreen> {
     _searchFocus.dispose();
     _placeSearchService.dispose();
     _locationService.dispose();
+    _offRouteSince = null;
+    _routeRecalculating = false;
     super.dispose();
   }
 
@@ -177,6 +189,8 @@ class _MapScreenState extends State<MapScreen> {
       _loading = false;
       _currentLocation = _cachedLastPosition;
     });
+
+    unawaited(_loadCurrentUserPhoto());
 
     unawaited(
       _loadCurrentLocation().catchError((e) {
@@ -201,6 +215,17 @@ class _MapScreenState extends State<MapScreen> {
         if (mounted) setState(() => _error = _cleanError(e));
       }),
     );
+  }
+
+  Future<void> _loadCurrentUserPhoto() async {
+    try {
+      final user = await AuthService().me();
+      if (!mounted) return;
+      setState(() {
+        _currentUserPhotoUrl =
+            user['profile_photo_url']?.toString();
+      });
+    } catch (_) {}
   }
 
   void _scheduleDailyCodeRefresh() {
@@ -230,7 +255,6 @@ class _MapScreenState extends State<MapScreen> {
     setState(() => _currentLocation = location);
     _updateTickerFromPosition(position);
 
-    // Only move the camera if the fix is decent.
     if (position.accuracy <= _maxAcceptableAccuracyMeters) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -261,9 +285,6 @@ class _MapScreenState extends State<MapScreen> {
     final request = _activeRequest;
     if (request == null || !request.isAccepted) return;
 
-    // Reject poor GPS fixes. Cell-tower fallback often reports
-    // accuracy in the thousands of meters — uploading those would
-    // put the other person on the wrong side of the country.
     if (position.accuracy > _maxAcceptableAccuracyMeters) {
       debugPrint(
         'GPS: skipping upload — accuracy=${position.accuracy.toStringAsFixed(1)}m '
@@ -500,50 +521,126 @@ class _MapScreenState extends State<MapScreen> {
       if (moved < 25) return;
     }
 
-    final result = await _placeRoutingService.fetchRoute(
-      from: origin,
-      to: destination.position,
-    );
+    final showBanner = _destinationRouteGeometry.isNotEmpty;
 
-    if (!mounted || result == null) return;
+    if (showBanner && mounted) {
+      setState(() => _routeRecalculating = true);
+    }
 
-    setState(() {
-      _destinationRouteGeometry = result.geometry;
-      _destinationRemainingMeters = result.distanceMeters;
-      _destinationRemainingSeconds = result.durationSeconds;
-      _lastRouteOrigin = origin;
-    });
-
-    if (result.geometry.length >= 2) {
-      final bounds = LatLngBounds.fromPoints(result.geometry);
-      _mapController.fitCamera(
-        CameraFit.bounds(
-          bounds: bounds,
-          padding: const EdgeInsets.fromLTRB(40, 100, 40, 260),
-        ),
+    try {
+      final result = await _placeRoutingService.fetchRoute(
+        from: origin,
+        to: destination.position,
       );
+
+      if (!mounted || result == null) {
+        if (mounted) setState(() => _routeRecalculating = false);
+        return;
+      }
+
+      setState(() {
+        _destinationRouteGeometry = result.geometry;
+        _destinationRemainingMeters = result.distanceMeters;
+        _destinationRemainingSeconds = result.durationSeconds;
+        _lastRouteOrigin = origin;
+        _routeRecalculating = false;
+      });
+
+      if (result.geometry.length >= 2) {
+        final bounds = LatLngBounds.fromPoints(result.geometry);
+        _mapController.fitCamera(
+          CameraFit.bounds(
+            bounds: bounds,
+            padding: const EdgeInsets.fromLTRB(40, 100, 40, 260),
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) setState(() => _routeRecalculating = false);
     }
   }
 
   void _maybeRecalcDestinationRoute() {
     if (_activeDestination == null) return;
-    if (_currentLocation == null) return;
 
-    final lastOrigin = _lastRouteOrigin;
-    if (lastOrigin == null) {
+    final current = _currentLocation;
+    if (current == null) return;
+
+    if (_destinationRouteGeometry.length < 2) {
       _buildDestinationRoute(force: true);
       return;
     }
 
-    final deviation = const Distance().as(
-      LengthUnit.Meter,
-      lastOrigin,
-      _currentLocation!,
+    final deviation = _distanceFromRoute(
+      current,
+      _destinationRouteGeometry,
     );
 
-    if (deviation > 60) {
-      _buildDestinationRoute(force: true);
+    if (deviation > _offRouteThresholdMeters) {
+      _offRouteSince ??= DateTime.now();
+
+      final offFor = DateTime.now().difference(_offRouteSince!);
+
+      if (offFor >= _offRouteGracePeriod) {
+        _offRouteSince = null;
+        _buildDestinationRoute(force: true);
+      }
+    } else {
+      _offRouteSince = null;
     }
+  }
+
+  double _distanceFromRoute(LatLng point, List<LatLng> route) {
+    if (route.length < 2) return double.infinity;
+
+    double minDist = double.infinity;
+    const calc = Distance();
+
+    for (int i = 0; i < route.length - 1; i++) {
+      final segDist = _distanceToSegment(
+        point,
+        route[i],
+        route[i + 1],
+        calc,
+      );
+      if (segDist < minDist) minDist = segDist;
+    }
+
+    return minDist;
+  }
+
+  double _distanceToSegment(
+    LatLng p,
+    LatLng a,
+    LatLng b,
+    Distance calc,
+  ) {
+    final ax = a.longitude;
+    final ay = a.latitude;
+    final bx = b.longitude;
+    final by = b.latitude;
+    final px = p.longitude;
+    final py = p.latitude;
+
+    final dx = bx - ax;
+    final dy = by - ay;
+    final len2 = dx * dx + dy * dy;
+
+    if (len2 == 0) {
+      return calc.as(LengthUnit.Meter, p, a);
+    }
+
+    var t = ((px - ax) * dx + (py - ay) * dy) / len2;
+    t = t.clamp(0.0, 1.0);
+
+    final projX = ax + t * dx;
+    final projY = ay + t * dy;
+
+    return calc.as(
+      LengthUnit.Meter,
+      p,
+      LatLng(projY, projX),
+    );
   }
 
   void _trimDestinationRoute(LatLng currentPosition) {
@@ -601,6 +698,8 @@ class _MapScreenState extends State<MapScreen> {
       _searchResults = <Place>[];
       _searchError = null;
       _searchLoading = false;
+      _offRouteSince = null;
+      _routeRecalculating = false;
     });
   }
 
@@ -984,33 +1083,38 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  // ============================================================
+  // MARKERS
+  // ============================================================
+
   Widget _buildCurrentLocationMarker() {
-    return const Icon(Icons.my_location, size: 38, color: Colors.blue);
+    return PhotoMarker(
+      photoUrl: _currentUserPhotoUrl ?? widget.currentUserPhotoUrl,
+      fallbackInitial: '?',
+      ringColor: const Color(0xFFD4AF37), // gold
+      fillColor: const Color(0xFFFFF8E1), // light gold
+      size: 50,
+    );
   }
 
   Widget _buildOtherLocationMarker() {
-    final staleness = _otherStaleness;
-
-    Color color;
-    if (staleness == null) {
-      color = Colors.red;
-    } else if (staleness.inSeconds < 30) {
-      color = Colors.red;
-    } else if (staleness.inHours < 1) {
-      color = Colors.orange.shade700;
-    } else {
-      color = Colors.grey.shade600;
-    }
-
-    return Icon(
-      Icons.person_pin_circle,
-      size: 48,
-      color: color,
+    return PhotoMarker(
+      photoUrl: widget.otherUserPhotoUrl,
+      fallbackInitial: widget.name,
+      ringColor: const Color(0xFF25D366), // green
+      fillColor: const Color(0xFFE8F5E9), // light green
+      size: 50,
     );
   }
 
   Widget _buildDestinationMarker() {
-    return const Icon(Icons.flag, size: 44, color: Colors.orange);
+    return PhotoMarker(
+      photoUrl: null,
+      fallbackInitial: '🚩',
+      ringColor: const Color(0xFFF57C00), // orange
+      fillColor: const Color(0xFFFFF3E0), // light orange
+      size: 48,
+    );
   }
 
   Widget _buildRoutePointMarker(int number) {
@@ -1055,6 +1159,42 @@ class _MapScreenState extends State<MapScreen> {
           fontWeight: FontWeight.bold,
           color: Colors.white,
           letterSpacing: 1,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildReroutingBanner() {
+    if (!_routeRecalculating) return const SizedBox.shrink();
+
+    return Material(
+      color: WebsColors.primaryGreen,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 10,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white,
+              ),
+            ),
+            SizedBox(width: 10),
+            Text(
+              'Rerouting…',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -1850,21 +1990,24 @@ class _MapScreenState extends State<MapScreen> {
                       Marker(
                         point: _currentLocation!,
                         width: 50,
-                        height: 50,
+                        height: 65,
+                        alignment: Alignment.topCenter,
                         child: _buildCurrentLocationMarker(),
                       ),
                     if (_otherLocation != null)
                       Marker(
                         point: _otherLocation!,
-                        width: 55,
-                        height: 55,
+                        width: 50,
+                        height: 65,
+                        alignment: Alignment.topCenter,
                         child: _buildOtherLocationMarker(),
                       ),
                     if (_activeDestination != null)
                       Marker(
                         point: _activeDestination!.position,
-                        width: 55,
-                        height: 55,
+                        width: 48,
+                        height: 62,
+                        alignment: Alignment.topCenter,
                         child: _buildDestinationMarker(),
                       ),
                     ..._routePoints.map(
@@ -1880,6 +2023,14 @@ class _MapScreenState extends State<MapScreen> {
               ],
             ),
           ),
+
+          if (_routeRecalculating)
+            Positioned(
+              top: showOtherTicker ? tickerHeight + 10 : 10,
+              left: 0,
+              right: 0,
+              child: Center(child: _buildReroutingBanner()),
+            ),
 
           if (_error != null)
             Positioned(

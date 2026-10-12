@@ -209,7 +209,7 @@ class LocationRequestService {
       body: {
         'latitude': latitude,
         'longitude': longitude,
-        if (accuracy != null) 'accuracy': accuracy,
+        'accuracy': ?accuracy,
       },
       token: token,
     );

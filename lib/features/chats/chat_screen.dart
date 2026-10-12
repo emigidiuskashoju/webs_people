@@ -46,7 +46,6 @@ class _ChatScreenState extends State<ChatScreen> {
   Timer? _locationRequestTimer;
 
   bool _isLoading = true;
-  bool _isSending = false;
   bool _isStartingCall = false;
   bool _isHandlingLocationRequest = false;
 
@@ -150,40 +149,57 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
-    if (text.isEmpty || _isSending) return;
-    setState(() => _isSending = true);
+    if (text.isEmpty) return;
+
+    // Clear the input immediately so the user can type the next
+    // message without waiting for the network.
+    _messageController.clear();
+
     try {
-      await _repository.createAndSendMessage(
+      // Fire and forget — createAndSendMessage already:
+      //  1. Saves the message locally with status=pending
+      //  2. Sends to the server in the background
+      //  3. Updates the local DB with status=sent or failed
+      _repository.createAndSendMessage(
         senderId: widget.currentUserId,
         recipientId: widget.userId,
         conversationId: _conversationId,
         text: text,
       );
-      _messageController.clear();
+
+      // Reload the message list after a short delay so the
+      // optimistic UI shows the pending bubble right away.
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      if (!mounted) return;
+
       final messages = await _repository.getConversation(
         _conversationId,
         currentUserId: widget.currentUserId,
       );
+
       if (!mounted) return;
       setState(() => _messages = messages);
       _scrollToBottom();
+
+      // Then refresh again shortly after in case the server
+      // responded very quickly (updates the check marks).
+      Future.delayed(const Duration(milliseconds: 800), () async {
+        if (!mounted) return;
+        final refreshed = await _repository.getConversation(
+          _conversationId,
+          currentUserId: widget.currentUserId,
+        );
+        if (!mounted) return;
+        setState(() => _messages = refreshed);
+      });
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            'Message could not be sent. It will remain available locally.',
-          ),
+          content: Text('Message could not be sent.'),
         ),
       );
-      final messages = await _repository.getConversation(
-        _conversationId,
-        currentUserId: widget.currentUserId,
-      );
-      if (!mounted) return;
-      setState(() => _messages = messages);
-    } finally {
-      if (mounted) setState(() => _isSending = false);
     }
   }
 
@@ -597,6 +613,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       currentUserId: widget.currentUserId,
                       userId: widget.userId,
                       name: widget.name,
+                      otherUserPhotoUrl: widget.profilePhotoUrl,
                     ),
                   ),
                 );
@@ -841,6 +858,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       currentUserId: widget.currentUserId,
                       userId: widget.userId,
                       name: widget.name,
+                      otherUserPhotoUrl: widget.profilePhotoUrl,
                     ),
                   ),
                 );
@@ -882,18 +900,12 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
             const SizedBox(width: 8),
-            IconButton(
-              onPressed: _isSending ? null : _sendMessage,
-              icon: _isSending
-                  ? const SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: WebsColors.primaryGreen,
-                      ),
-                    )
-                  : const Icon(Icons.send, color: WebsColors.primaryGreen),
+                        IconButton(
+              onPressed: _sendMessage,
+              icon: const Icon(
+                Icons.send,
+                color: WebsColors.primaryGreen,
+              ),
             ),
           ],
         ),

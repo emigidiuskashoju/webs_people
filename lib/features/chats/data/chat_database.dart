@@ -297,13 +297,13 @@ class ChatDatabase {
       summaries[conversationId] = ConversationSummary(
         lastMessageText: isNewer
             ? message.text
-            : existing!.lastMessageText,
+            : existing.lastMessageText,
         lastMessageAt: isNewer
             ? message.createdAt
-            : existing!.lastMessageAt,
+            : existing.lastMessageAt,
         lastMessageIsMine: isNewer
             ? isMine
-            : existing!.lastMessageIsMine,
+            : existing.lastMessageIsMine,
         unreadCount: newUnreadCount,
       );
     }

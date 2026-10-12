@@ -17,7 +17,7 @@ class AppDatabase {
 
   Future<Database> get database async {
     if (_providedDatabase != null) {
-      return _providedDatabase!;
+      return _providedDatabase;
     }
 
     if (_database != null) {

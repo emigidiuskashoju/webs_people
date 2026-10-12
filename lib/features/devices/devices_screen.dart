@@ -112,8 +112,9 @@ class _DevicesScreenState extends State<DevicesScreen> {
     final lost = data['is_lost'] == true;
 
     IconData platformIcon = Icons.devices;
-    if (platform == 'android') platformIcon = Icons.android;
-    else if (platform == 'ios') platformIcon = Icons.phone_iphone;
+    if (platform == 'android') {
+      platformIcon = Icons.android;
+    } else if (platform == 'ios') platformIcon = Icons.phone_iphone;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
