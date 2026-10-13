@@ -404,7 +404,7 @@ class _WebsAppState extends State<WebsApp> {
       return SplashScreen(
         onFinished: _onSplashFinished,
         themeMode: _themeMode,
-        minimumDuration: const Duration(milliseconds: 1000),
+        minimumDuration: const Duration(milliseconds: 3000),
       );
     }
 

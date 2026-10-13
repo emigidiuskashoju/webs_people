@@ -1991,7 +1991,7 @@ class _MapScreenState extends State<MapScreen> {
                         point: _currentLocation!,
                         width: 50,
                         height: 65,
-                        alignment: Alignment.topCenter,
+                        alignment: Alignment.bottomCenter,
                         child: _buildCurrentLocationMarker(),
                       ),
                     if (_otherLocation != null)

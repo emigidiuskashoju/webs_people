@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/notifications/active_conversation.dart';
 import '../../core/theme/webs_colors.dart';
+import '../../core/widgets/cached_avatar.dart';
 import '../calls/audio_call_screen.dart';
 import '../calls/services/call_service.dart';
 import '../map/map_screen.dart';
@@ -44,6 +45,7 @@ class _ChatScreenState extends State<ChatScreen> {
   List<ChatMessage> _messages = [];
   List<LocationRequest> _locationRequests = [];
   Timer? _locationRequestTimer;
+  Timer? _statusPollTimer;
 
   bool _isLoading = true;
   bool _isStartingCall = false;
@@ -66,12 +68,17 @@ class _ChatScreenState extends State<ChatScreen> {
       const Duration(seconds: 5),
       (_) => _loadLocationRequests(silent: true),
     );
+    _statusPollTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _refreshMessageStatuses(),
+    );
   }
 
   @override
   void dispose() {
     ActiveConversation.instance.leave(_conversationId);
     _locationRequestTimer?.cancel();
+    _statusPollTimer?.cancel();
     _messageController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -119,6 +126,31 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (_) {}
   }
 
+  Future<void> _refreshMessageStatuses() async {
+    if (!mounted) return;
+    try {
+      await _repository.syncReadReceipts();
+
+      final messages = await _repository.getConversation(
+        _conversationId,
+        currentUserId: widget.currentUserId,
+      );
+
+      if (!mounted) return;
+
+      final changed = messages.length != _messages.length ||
+          messages.any((m) {
+            final idx =
+                _messages.indexWhere((old) => old.localId == m.localId);
+            return idx == -1 || _messages[idx].status != m.status;
+          });
+
+      if (changed) {
+        setState(() => _messages = messages);
+      }
+    } catch (_) {}
+  }
+
   Future<void> _markMessagesAsRead() async {
     try {
       await _repository.markConversationAsRead(
@@ -151,15 +183,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
 
-    // Clear the input immediately so the user can type the next
-    // message without waiting for the network.
     _messageController.clear();
 
     try {
-      // Fire and forget — createAndSendMessage already:
-      //  1. Saves the message locally with status=pending
-      //  2. Sends to the server in the background
-      //  3. Updates the local DB with status=sent or failed
       _repository.createAndSendMessage(
         senderId: widget.currentUserId,
         recipientId: widget.userId,
@@ -167,8 +193,6 @@ class _ChatScreenState extends State<ChatScreen> {
         text: text,
       );
 
-      // Reload the message list after a short delay so the
-      // optimistic UI shows the pending bubble right away.
       await Future.delayed(const Duration(milliseconds: 50));
 
       if (!mounted) return;
@@ -182,16 +206,9 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() => _messages = messages);
       _scrollToBottom();
 
-      // Then refresh again shortly after in case the server
-      // responded very quickly (updates the check marks).
       Future.delayed(const Duration(milliseconds: 800), () async {
         if (!mounted) return;
-        final refreshed = await _repository.getConversation(
-          _conversationId,
-          currentUserId: widget.currentUserId,
-        );
-        if (!mounted) return;
-        setState(() => _messages = refreshed);
+        await _refreshMessageStatuses();
       });
     } catch (_) {
       if (!mounted) return;
@@ -900,7 +917,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
             const SizedBox(width: 8),
-                        IconButton(
+            IconButton(
               onPressed: _sendMessage,
               icon: const Icon(
                 Icons.send,
@@ -919,16 +936,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // ------------------------------------------------------------
-    // Theme-aware colors for the AppBar.
-    //
-    // The AppBar uses a transparent background (from the global
-    // theme) and inherits the body's color. So we compute the
-    // title text color based on the current brightness:
-    //
-    //   Light theme → dark text (black87)
-    //   Dark theme  → light text (white)
-    // ------------------------------------------------------------
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final appBarTextColor = isDark ? Colors.white : Colors.black87;
     final appBarSubTextColor = isDark
@@ -939,26 +946,10 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: AppBar(
         title: Row(
           children: [
-            CircleAvatar(
+            CachedAvatar(
+              photoUrl: widget.profilePhotoUrl,
+              fallbackInitial: widget.name.isNotEmpty ? widget.name : '?',
               radius: 20,
-              backgroundColor: WebsColors.softGreen(context),
-              backgroundImage:
-                  widget.profilePhotoUrl != null &&
-                          widget.profilePhotoUrl!.isNotEmpty
-                      ? NetworkImage(widget.profilePhotoUrl!)
-                      : null,
-              child: widget.profilePhotoUrl == null ||
-                      widget.profilePhotoUrl!.isEmpty
-                  ? Text(
-                      widget.name.isNotEmpty
-                          ? widget.name[0].toUpperCase()
-                          : '?',
-                      style: const TextStyle(
-                        color: WebsColors.primaryGreen,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    )
-                  : null,
             ),
             const SizedBox(width: 10),
             Expanded(

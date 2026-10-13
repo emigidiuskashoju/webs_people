@@ -5,6 +5,7 @@ import '../../core/errors/api_exception.dart';
 import '../../core/storage/auth_storage.dart';
 import '../../core/storage/saved_account_storage.dart';
 import '../../core/theme/webs_colors.dart';
+import '../../core/widgets/cached_avatar.dart';
 import '../../core/widgets/webs_background.dart';
 import '../auth/services/auth_service.dart';
 import '../main/main_navigation_screen.dart';
@@ -16,6 +17,7 @@ import 'models/phone_contact.dart';
 import 'models/preloaded_chats_data.dart';
 import 'services/contact_match_service.dart';
 import 'services/contact_preloader.dart';
+import 'services/phone_contacts_service.dart';
 
 class ChatsScreen extends StatefulWidget {
   final PreloadedChatsData? preloaded;
@@ -28,16 +30,18 @@ class ChatsScreen extends StatefulWidget {
   @override
   State<ChatsScreen> createState() => _ChatsScreenState();
 }
- 
-class _ChatsScreenState extends State<ChatsScreen> {
 
+class _ChatsScreenState extends State<ChatsScreen> {
+  final PhoneContactsService _contactsService = PhoneContactsService();
+  final ContactMatchService _matchService = ContactMatchService();
   final AuthService _authService = AuthService();
   final SavedAccountStorage _savedAccountStorage = SavedAccountStorage();
   final AuthStorage _authStorage = AuthStorage();
   final ChatRepository _chatRepository = ChatRepository();
   final LocationRequestService _locationRequestService =
       LocationRequestService();
-   final ContactPreloader _preloader = ContactPreloader();
+
+  final ContactPreloader _preloader = ContactPreloader();
   bool _backgroundRefreshRunning = false;
 
   final TextEditingController _searchController = TextEditingController();
@@ -240,7 +244,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
     return id;
   }
 
-    Future<void> _loadContacts() async {
+  Future<void> _loadContacts() async {
     if (mounted) {
       setState(() {
         _isLoading = true;
@@ -252,7 +256,6 @@ class _ChatsScreenState extends State<ChatsScreen> {
       await _ensureCurrentUserId();
       final currentUserId = _currentUserId!;
 
-      // 1. Instant — show cached data
       final cached = await _preloader.loadFromCacheOnly();
       if (mounted && cached.allContacts.isNotEmpty) {
         setState(() {
@@ -269,17 +272,16 @@ class _ChatsScreenState extends State<ChatsScreen> {
         });
       }
 
-      // 2. Determine whether a refresh is needed
       final stale = await _preloader.isCacheStale();
 
       if (stale || cached.allContacts.isEmpty) {
-        // Refresh (foreground on first load, background otherwise)
-        await _runBackgroundRefresh(silent: cached.allContacts.isEmpty ? false : true);
+        await _runBackgroundRefresh(
+          silent: cached.allContacts.isEmpty ? false : true,
+        );
       } else if (mounted) {
         setState(() => _isLoading = false);
       }
 
-      // 3. Refresh conversation summaries (fast)
       if (mounted) {
         await _loadSummariesAndPending();
       }
@@ -292,12 +294,6 @@ class _ChatsScreenState extends State<ChatsScreen> {
     }
   }
 
-  /// Runs the slow refresh (reads phone contacts + server
-  /// matching). Updates the UI when done.
-  ///
-  /// If [silent] is true, we don't show the loading spinner —
-  /// the user sees cached data while this runs in the
-  /// background.
   Future<void> _runBackgroundRefresh({bool silent = true}) async {
     if (_backgroundRefreshRunning) return;
     _backgroundRefreshRunning = true;
@@ -336,7 +332,6 @@ class _ChatsScreenState extends State<ChatsScreen> {
     }
   }
 
-  /// Called by pull-to-refresh — always forces a full refresh.
   Future<void> _forceRefresh() async {
     if (_backgroundRefreshRunning) return;
     await _runBackgroundRefresh(silent: false);
@@ -747,34 +742,14 @@ class _ChatsScreenState extends State<ChatsScreen> {
     PhoneContact contact,
     ContactMatchUser user,
   ) {
-    final profilePhotoUrl = user.profilePhotoUrl;
-
-    if (profilePhotoUrl != null && profilePhotoUrl.isNotEmpty) {
-      return CircleAvatar(
-        radius: 28,
-        backgroundImage: NetworkImage(profilePhotoUrl),
-        backgroundColor: WebsColors.softGreen(context),
-      );
-    }
-
     final displayName = user.name.trim().isNotEmpty
         ? user.name.trim()
         : contact.name.trim();
 
-    final initial =
-        displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
-
-    return CircleAvatar(
+    return CachedAvatar(
+      photoUrl: user.profilePhotoUrl,
+      fallbackInitial: displayName.isNotEmpty ? displayName : '?',
       radius: 28,
-      backgroundColor: WebsColors.softGreen(context),
-      child: Text(
-        initial,
-        style: const TextStyle(
-          fontSize: 22,
-          fontWeight: FontWeight.bold,
-          color: WebsColors.primaryGreen,
-        ),
-      ),
     );
   }
 

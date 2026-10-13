@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/notifications/notification_preferences.dart';
 import '../../core/storage/auth_storage.dart';
 import '../../core/theme/webs_colors.dart';
+import '../../core/widgets/cached_avatar.dart';
 import '../auth/register_screen.dart';
 import '../../main.dart' show WebsThemeScope;
 import 'about_webs_people_screen.dart';
@@ -221,27 +222,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildAvatar() {
-    if (_profilePhotoUrl != null) {
-      return CircleAvatar(
-        radius: 34,
-        backgroundImage: NetworkImage(_profilePhotoUrl!),
-      );
-    }
-
-    final name = _profileName.trim();
-    final firstLetter = name.isNotEmpty ? name[0].toUpperCase() : 'U';
-
-    return CircleAvatar(
+    return CachedAvatar(
+      photoUrl: _profilePhotoUrl,
+      fallbackInitial: _profileName.isNotEmpty ? _profileName : 'U',
       radius: 34,
-      backgroundColor: WebsColors.softGreen(context),
-      child: Text(
-        firstLetter,
-        style: const TextStyle(
-          color: WebsColors.primaryGreen,
-          fontSize: 24,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
     );
   }
 

@@ -3,7 +3,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../core/cache/profile_photo_cache.dart';
 import '../../core/theme/webs_colors.dart';
+import '../../core/widgets/cached_avatar.dart';
 import '../../core/widgets/webs_background.dart';
 import 'services/profile_service.dart';
 
@@ -115,8 +117,15 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   Future<void> _uploadPhoto(File file) async {
     setState(() => _isUploadingPhoto = true);
     try {
+      // Remember the old URL so we can evict its cached file.
+      final oldUrl = _profilePhotoUrl;
+
       final user = await _profileService.uploadPhoto(file);
       if (!mounted) return;
+
+      // Drop the old cached photo so it doesn't linger.
+      await ProfilePhotoCache.instance.evict(oldUrl);
+
       setState(() {
         _profilePhotoUrl = _nullableString(user['profile_photo_url']);
       });
@@ -158,8 +167,13 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     if (shouldRemove != true) return;
     setState(() => _isRemovingPhoto = true);
     try {
+      final oldUrl = _profilePhotoUrl;
+
       final user = await _profileService.removePhoto();
       if (!mounted) return;
+
+      await ProfilePhotoCache.instance.evict(oldUrl);
+
       setState(() {
         _profilePhotoUrl = _nullableString(user['profile_photo_url']);
       });
@@ -173,26 +187,10 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   }
 
   Widget _buildAvatar() {
-    final photoUrl = _profilePhotoUrl;
-    if (photoUrl != null && photoUrl.trim().isNotEmpty) {
-      return CircleAvatar(
-        radius: 52,
-        backgroundColor: WebsColors.softGreen(context),
-        backgroundImage: NetworkImage(photoUrl),
-      );
-    }
-    final initial = _getInitial();
-    return CircleAvatar(
+    return CachedAvatar(
+      photoUrl: _profilePhotoUrl,
+      fallbackInitial: _getInitial(),
       radius: 52,
-      backgroundColor: WebsColors.softGreen(context),
-      child: Text(
-        initial,
-        style: const TextStyle(
-          fontSize: 38,
-          fontWeight: FontWeight.bold,
-          color: WebsColors.primaryGreen,
-        ),
-      ),
     );
   }
 
