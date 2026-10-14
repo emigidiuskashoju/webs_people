@@ -194,6 +194,22 @@ class LocationRequestService {
     return _requestFromResponse(response);
   }
 
+  /// Ends an active location sharing session. Used by
+  /// both the "Cancel" and "Complete" buttons in the UI.
+  Future<LocationRequest> endRequest(
+    int requestId,
+  ) async {
+    final token = await _getToken();
+
+    final response = await _apiClient.post(
+      '/location/requests/$requestId/end',
+      body: {},
+      token: token,
+    );
+
+    return _requestFromResponse(response);
+  }
+
   Future<void> updateLocation({
     required int requestId,
     required double latitude,
@@ -209,7 +225,7 @@ class LocationRequestService {
       body: {
         'latitude': latitude,
         'longitude': longitude,
-        'accuracy': ?accuracy,
+        'accuracy': accuracy,
       },
       token: token,
     );

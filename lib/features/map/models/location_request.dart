@@ -31,34 +31,31 @@ class LocationRequest {
   bool get isPending =>
       status == LocationRequestStatus.pending;
 
+  bool get isDenied =>
+      status == LocationRequestStatus.denied;
+
+  bool get isExpired =>
+      status == LocationRequestStatus.expired;
+
   /// True when the *other* person has posted coordinates.
-  ///
-  /// Pass the current user's id so the model knows which
-  /// shared row counts as "the other person".
   bool hasOtherLocation(int currentUserId) =>
       otherLocation(currentUserId) != null;
 
-  /// The other person's shared location, or `null` if they
-  /// have not posted one yet.
   SharedLocation? otherLocation(int currentUserId) {
     for (final row in sharedLocations) {
       if (row.userId != currentUserId) {
         return row;
       }
     }
-
     return null;
   }
 
-  /// The current user's own shared location on this request,
-  /// or `null` if they have not posted one yet.
   SharedLocation? myLocation(int currentUserId) {
     for (final row in sharedLocations) {
       if (row.userId == currentUserId) {
         return row;
       }
     }
-
     return null;
   }
 

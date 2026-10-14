@@ -10,6 +10,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../../core/background/background_location_service.dart';
 import '../../core/map/mapbox_tile_layer.dart';
+import '../../core/map/map_style_preference.dart';
 import '../../core/storage/auth_storage.dart';
 import '../../core/theme/webs_colors.dart';
 import '../auth/services/auth_service.dart';
@@ -24,6 +25,7 @@ import 'services/custom_route_service.dart';
 import 'services/place_search_service.dart';
 import 'services/place_routing_service.dart';
 import 'widgets/location_ticker.dart';
+import 'widgets/map_style_sheet.dart';
 import 'widgets/photo_marker.dart';
 import 'widgets/place_search_card.dart';
 
@@ -122,6 +124,8 @@ class _MapScreenState extends State<MapScreen> {
   bool _customRouteMode = false;
   bool _customRouteGenerating = false;
 
+  MapStyleKind _mapStyle = MapStyleKind.satellite;
+
   static LatLng? _cachedLastPosition;
 
   @override
@@ -191,6 +195,7 @@ class _MapScreenState extends State<MapScreen> {
     });
 
     unawaited(_loadCurrentUserPhoto());
+    unawaited(_loadMapStyle());
 
     unawaited(
       _loadCurrentLocation().catchError((e) {
@@ -226,6 +231,23 @@ class _MapScreenState extends State<MapScreen> {
             user['profile_photo_url']?.toString();
       });
     } catch (_) {}
+  }
+
+  Future<void> _loadMapStyle() async {
+    final kind = await MapStylePreference.load();
+    if (!mounted) return;
+    setState(() => _mapStyle = kind);
+  }
+
+  Future<void> _pickMapStyle() async {
+    final picked = await MapStyleSheet.show(
+      context,
+      current: _mapStyle,
+    );
+    if (picked == null || !mounted) return;
+
+    setState(() => _mapStyle = picked);
+    await MapStylePreference.save(picked);
   }
 
   void _scheduleDailyCodeRefresh() {
@@ -1049,6 +1071,56 @@ class _MapScreenState extends State<MapScreen> {
     _mapController.move(destination.position, 15);
   }
 
+  Future<void> _endLocationSharing() async {
+    final request = _activeRequest;
+    if (request == null) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('End location sharing?'),
+        content: Text(
+          'You and ${widget.name} will no longer see each '
+          'other\'s location.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+            ),
+            child: const Text('End'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      final updated =
+          await _requestService.endRequest(request.id);
+
+      if (!mounted) return;
+
+      setState(() {
+        _activeRequest = updated;
+        _otherLocation = null;
+        _otherAccuracy = null;
+        _otherLocationUpdatedAt = null;
+      });
+
+      _showMessage('Location sharing ended.');
+    } catch (e) {
+      if (!mounted) return;
+      _showMessage(_cleanError(e));
+    }
+  }
+
   void _showMessage(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1091,8 +1163,8 @@ class _MapScreenState extends State<MapScreen> {
     return PhotoMarker(
       photoUrl: _currentUserPhotoUrl ?? widget.currentUserPhotoUrl,
       fallbackInitial: '?',
-      ringColor: const Color(0xFFD4AF37), // gold
-      fillColor: const Color(0xFFFFF8E1), // light gold
+      ringColor: const Color(0xFFD4AF37),
+      fillColor: const Color(0xFFFFF8E1),
       size: 50,
     );
   }
@@ -1101,8 +1173,8 @@ class _MapScreenState extends State<MapScreen> {
     return PhotoMarker(
       photoUrl: widget.otherUserPhotoUrl,
       fallbackInitial: widget.name,
-      ringColor: const Color(0xFF25D366), // green
-      fillColor: const Color(0xFFE8F5E9), // light green
+      ringColor: const Color(0xFF25D366),
+      fillColor: const Color(0xFFE8F5E9),
       size: 50,
     );
   }
@@ -1111,8 +1183,8 @@ class _MapScreenState extends State<MapScreen> {
     return PhotoMarker(
       photoUrl: null,
       fallbackInitial: '🚩',
-      ringColor: const Color(0xFFF57C00), // orange
-      fillColor: const Color(0xFFFFF3E0), // light orange
+      ringColor: const Color(0xFFF57C00),
+      fillColor: const Color(0xFFFFF3E0),
       size: 48,
     );
   }
@@ -1449,6 +1521,46 @@ class _MapScreenState extends State<MapScreen> {
     final request = _activeRequest;
     if (request == null) return const SizedBox.shrink();
 
+    if (request.isDenied || request.isExpired) {
+      return _card(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${widget.name}\'s location',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: WebsColors.textDark(context),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(
+                  request.isExpired
+                      ? Icons.timer_off_outlined
+                      : Icons.cancel_outlined,
+                  color: Colors.orange.shade800,
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    request.isExpired
+                        ? 'Location request expired.'
+                        : 'Location sharing ended.',
+                    style: TextStyle(
+                      color: WebsColors.textLight(context),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
     if (!request.isAccepted) {
       return _card(
         child: Column(
@@ -1651,6 +1763,46 @@ class _MapScreenState extends State<MapScreen> {
                       side: const BorderSide(
                         color: WebsColors.primaryGreen,
                       ),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _endLocationSharing,
+                    icon: const Icon(
+                      Icons.cancel_outlined,
+                      color: Colors.redAccent,
+                    ),
+                    label: const Text(
+                      'Cancel',
+                      style: TextStyle(color: Colors.redAccent),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.redAccent),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: _endLocationSharing,
+                    icon: const Icon(Icons.check_circle_outline),
+                    label: const Text('Complete'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: WebsColors.primaryGreen,
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -1928,6 +2080,11 @@ class _MapScreenState extends State<MapScreen> {
             tooltip: 'My location',
             icon: const Icon(Icons.my_location),
           ),
+          IconButton(
+            onPressed: _pickMapStyle,
+            tooltip: 'Map style',
+            icon: const Icon(Icons.layers_outlined),
+          ),
         ],
       ),
       body: Stack(
@@ -1945,7 +2102,7 @@ class _MapScreenState extends State<MapScreen> {
                 },
               ),
               children: [
-                MapboxTileLayer.streets(),
+                MapboxTileLayer.forStyle(_mapStyle),
 
                 if (_routeGeometry.length >= 2)
                   PolylineLayer(
@@ -1994,12 +2151,14 @@ class _MapScreenState extends State<MapScreen> {
                         alignment: Alignment.bottomCenter,
                         child: _buildCurrentLocationMarker(),
                       ),
-                    if (_otherLocation != null)
+                    if (_otherLocation != null &&
+                        _activeRequest != null &&
+                        _activeRequest!.isAccepted)
                       Marker(
                         point: _otherLocation!,
                         width: 50,
                         height: 65,
-                        alignment: Alignment.topCenter,
+                        alignment: Alignment.bottomCenter,
                         child: _buildOtherLocationMarker(),
                       ),
                     if (_activeDestination != null)
@@ -2007,7 +2166,7 @@ class _MapScreenState extends State<MapScreen> {
                         point: _activeDestination!.position,
                         width: 48,
                         height: 62,
-                        alignment: Alignment.topCenter,
+                        alignment: Alignment.bottomCenter,
                         child: _buildDestinationMarker(),
                       ),
                     ..._routePoints.map(
