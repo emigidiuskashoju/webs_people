@@ -119,7 +119,22 @@ class ApiEndpoints {
   ) =>
       '/connections/requests/$requestId/reject';
 
-    // ============================================================
+  // ============================================================
+  // PRESENCE
+  // ============================================================
+
+  static const String presenceHeartbeat =
+      '/presence/heartbeat';
+
+  static const String presenceIndex =
+      '/presence';
+
+  static String presenceForUser(
+    int userId,
+  ) =>
+      '/presence/$userId';
+
+  // ============================================================
   // LOCATION
   // ============================================================
 
@@ -224,4 +239,9 @@ class ApiEndpoints {
       '/calls/events/$eventId/ack';
 
   static const String fcmToken = '/fcm-token';
+
+  static String endLocationRequest(
+    int requestId,
+  ) =>
+      '/location/requests/$requestId/end';
 }

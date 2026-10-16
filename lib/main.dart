@@ -18,6 +18,7 @@ import 'features/chats/chat_screen.dart';
 import 'features/chats/models/preloaded_chats_data.dart';
 import 'features/chats/services/contact_preloader.dart';
 import 'features/main/main_navigation_screen.dart';
+import 'features/presence/presence_heartbeat.dart';
 import 'features/settings/services/appearance_service.dart';
 
 final GlobalKey<NavigatorState> websNavigatorKey =
@@ -72,6 +73,12 @@ Future<void> _initializeBackgroundServices() async {
     debugPrint('BG-SERVICE: initialised');
   } catch (e) {
     debugPrint('BG-SERVICE: initialisation failed: $e');
+  }
+
+  try {
+    await PresenceHeartbeat.instance.start();
+  } catch (e) {
+    debugPrint('PRESENCE: initialisation failed: $e');
   }
 
   debugPrint('STARTUP: all background services initialised');
@@ -166,9 +173,17 @@ class _WebsAppState extends State<WebsApp> {
     });
   }
 
-  void _handleConversationTap(String conversationId) {
-    final currentUserId = _preloadedChats?.currentUserId;
-    if (currentUserId == null) return;
+  Future<void> _handleConversationTap(String conversationId) async {
+    final preloaded = await _waitForPreloadedChats();
+
+    final currentUserId = preloaded?.currentUserId;
+    if (currentUserId == null) {
+      debugPrint(
+        'NOTIF-TAP: giving up on $conversationId '
+        '(preloaded chats never loaded)',
+      );
+      return;
+    }
 
     final parts = conversationId.split('_');
     if (parts.length != 2) return;
@@ -183,17 +198,15 @@ class _WebsAppState extends State<WebsApp> {
     String phoneNumber = '';
     String? profilePhotoUrl;
 
-    final matched = _preloadedChats?.matchedUsersByPhone;
-    if (matched != null) {
-      for (final entry in matched.entries) {
-        if (entry.value.id == otherUserId) {
-          name = entry.value.name.trim().isNotEmpty
-              ? entry.value.name.trim()
-              : entry.key;
-          phoneNumber = entry.value.phoneNumber;
-          profilePhotoUrl = entry.value.profilePhotoUrl;
-          break;
-        }
+    final matched = preloaded!.matchedUsersByPhone;
+    for (final entry in matched.entries) {
+      if (entry.value.id == otherUserId) {
+        name = entry.value.name.trim().isNotEmpty
+            ? entry.value.name.trim()
+            : entry.key;
+        phoneNumber = entry.value.phoneNumber;
+        profilePhotoUrl = entry.value.profilePhotoUrl;
+        break;
       }
     }
 
@@ -211,6 +224,26 @@ class _WebsAppState extends State<WebsApp> {
         ),
       ),
     );
+  }
+
+  Future<PreloadedChatsData?> _waitForPreloadedChats({
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    if (_preloadedChats != null) return _preloadedChats;
+
+    final deadline = DateTime.now().add(timeout);
+
+    while (DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(
+        const Duration(milliseconds: 150),
+      );
+
+      if (_preloadedChats != null) {
+        return _preloadedChats;
+      }
+    }
+
+    return _preloadedChats;
   }
 
   // ============================================================
@@ -419,7 +452,7 @@ class WebsThemeScope extends InheritedWidget {
   final ThemeMode themeMode;
   final ValueChanged<ThemeMode> onThemeModeChanged;
 
-  const WebsThemeScope({super.key, 
+  const WebsThemeScope({super.key,
     required this.themeMode,
     required this.onThemeModeChanged,
     required super.child,

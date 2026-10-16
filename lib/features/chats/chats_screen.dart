@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -10,6 +12,8 @@ import '../../core/widgets/webs_background.dart';
 import '../auth/services/auth_service.dart';
 import '../main/main_navigation_screen.dart';
 import '../map/services/location_request_service.dart';
+import '../presence/models/user_presence.dart';
+import '../presence/services/presence_service.dart';
 import 'chat_screen.dart';
 import 'data/chat_database.dart';
 import 'data/chat_repository.dart';
@@ -40,6 +44,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
   final ChatRepository _chatRepository = ChatRepository();
   final LocationRequestService _locationRequestService =
       LocationRequestService();
+  final PresenceService _presenceService = PresenceService();
 
   final ContactPreloader _preloader = ContactPreloader();
   bool _backgroundRefreshRunning = false;
@@ -56,8 +61,11 @@ class _ChatsScreenState extends State<ChatsScreen> {
   Map<String, ContactMatchUser> _matchedUsersByPhone = {};
 
   Map<String, ConversationSummary> _summaries = {};
+  Map<int, UserPresence> _presences = {};
 
   Set<int> _pendingLocationUserIds = <int>{};
+
+  Timer? _presencePollTimer;
 
   String _searchQuery = '';
 
@@ -66,6 +74,12 @@ class _ChatsScreenState extends State<ChatsScreen> {
     super.initState();
 
     _searchController.addListener(_onSearchChanged);
+
+    _loadPresences();
+    _presencePollTimer = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => _loadPresences(),
+    );
 
     final preloaded = widget.preloaded;
 
@@ -90,6 +104,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
   @override
   void dispose() {
+    _presencePollTimer?.cancel();
     _searchController.removeListener(_onSearchChanged);
     _searchController.dispose();
     super.dispose();
@@ -103,6 +118,40 @@ class _ChatsScreenState extends State<ChatsScreen> {
     setState(() {
       _searchQuery = query;
     });
+  }
+
+  // ============================================================
+  // PRESENCE
+  // ============================================================
+
+    Future<void> _loadPresences() async {
+    final currentUserId = _currentUserId;
+    if (currentUserId == null) return;
+
+    // Only ask about the users actually visible in the chats
+    // list. This keeps the presence request small no matter
+    // how many users exist in the system.
+    final ids = <int>{};
+
+    for (final contact in _registeredContacts) {
+      final user = _matchedUsersByPhone[contact.phoneNumber];
+      if (user != null && user.id != currentUserId) {
+        ids.add(user.id);
+      }
+    }
+
+    if (ids.isEmpty) {
+      if (!mounted) return;
+      if (_presences.isEmpty) return;
+      setState(() => _presences = {});
+      return;
+    }
+
+    try {
+      final presences = await _presenceService.getForUsers(ids);
+      if (!mounted) return;
+      setState(() => _presences = presences);
+    } catch (_) {}
   }
 
   // ============================================================
@@ -335,6 +384,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
   Future<void> _forceRefresh() async {
     if (_backgroundRefreshRunning) return;
     await _runBackgroundRefresh(silent: false);
+    await _loadPresences();
   }
 
   // ============================================================
@@ -753,6 +803,36 @@ class _ChatsScreenState extends State<ChatsScreen> {
     );
   }
 
+  Widget _buildAvatarWithPresence(
+    PhoneContact contact,
+    ContactMatchUser user,
+  ) {
+    final isOnline = _presences[user.id]?.online == true;
+
+    return Stack(
+      children: [
+        _buildRegisteredAvatar(contact, user),
+        if (isOnline)
+          Positioned(
+            right: 0,
+            bottom: 0,
+            child: Container(
+              width: 16,
+              height: 16,
+              decoration: BoxDecoration(
+                color: const Color(0xFF25D366),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: WebsColors.surface(context),
+                  width: 2,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
   Widget _buildRegisteredUserTile(
     PhoneContact contact,
     ContactMatchUser user,
@@ -795,7 +875,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
             padding: const EdgeInsets.all(14),
             child: Row(
               children: [
-                _buildRegisteredAvatar(contact, user),
+                _buildAvatarWithPresence(contact, user),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(
@@ -812,7 +892,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
                         ),
                       ),
                       const SizedBox(height: 4),
-                      _buildPreviewLine(summary),
+                      _buildPreviewLine(summary, user.id),
                     ],
                   ),
                 ),
@@ -829,10 +909,34 @@ class _ChatsScreenState extends State<ChatsScreen> {
     );
   }
 
-  Widget _buildPreviewLine(ConversationSummary? summary) {
+  Widget _buildPreviewLine(
+    ConversationSummary? summary,
+    int otherUserId,
+  ) {
     final light = WebsColors.textLight(context);
 
-    if (summary == null) {
+    final presence = _presences[otherUserId];
+    final presenceLabel = presence?.statusLabel(
+      isTypingHere: false,
+    );
+
+    if (summary == null || summary.lastMessageText.trim().isEmpty) {
+      if (presenceLabel != null && presenceLabel.isNotEmpty) {
+        return Text(
+          presenceLabel,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 13,
+            fontStyle: presence?.typing == true
+                ? FontStyle.italic
+                : FontStyle.normal,
+            color: presence?.online == true
+                ? WebsColors.primaryGreen
+                : light,
+          ),
+        );
+      }
       return Text(
         '',
         style: TextStyle(fontSize: 13, color: light),

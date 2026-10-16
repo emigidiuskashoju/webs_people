@@ -77,7 +77,7 @@ class _AudioCallScreenState extends State<AudioCallScreen>
     final status = widget.callService.callStatus.value;
     switch (status) {
       case CallStatus.ringing:
-        return 'Incoming call';
+        return 'Ringing...';
       case CallStatus.calling:
         return 'Calling...';
       case CallStatus.connecting:
@@ -154,9 +154,6 @@ class _AudioCallScreenState extends State<AudioCallScreen>
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    // --------------------------------------------------
-                    // Avatar with optional heartbeat rings
-                    // --------------------------------------------------
                     SizedBox(
                       width: 220,
                       height: 220,

@@ -55,6 +55,8 @@ class CallService {
     CallRecord? record;
 
     try {
+      // 1. Tell the server a call is starting. This creates
+      //    the call row so the recipient can be notified.
       final start =
           await _signaling.startCall(
         recipientId: recipientId,
@@ -76,6 +78,10 @@ class CallService {
 
       _activeRecord = record;
 
+      // 2. Start polling now, so we catch 'accept' /
+      //    'decline' as soon as they arrive.
+      _startPolling();
+
       _webRtc.onIceCandidate =
           _sendIceCandidate;
 
@@ -90,17 +96,27 @@ class CallService {
       final offer =
           await _webRtc.createOffer();
 
+      final offerSdp = offer.sdp ?? '';
+
+      if (offerSdp.isEmpty) {
+        throw StateError(
+          'Generated offer has an empty SDP.',
+        );
+      }
+
       await _signaling.sendEvent(
         callId: start.callId,
         recipientId: recipientId,
         event: 'offer',
         payload: {
-          'sdp': offer.sdp ?? '',
+          'sdp': offerSdp,
           'type': offer.type ?? 'offer',
         },
       );
 
-      _startPolling();
+      // 3. Offer is delivered — reflect "ringing" in the UI.
+      callStatus.value =
+          CallStatus.ringing;
 
       return record;
     } catch (e) {
@@ -118,6 +134,9 @@ class CallService {
       }
 
       await _webRtc.close();
+
+      _pollTimer?.cancel();
+      _pollTimer = null;
 
       _activeCallId = null;
       _remoteUserId = null;

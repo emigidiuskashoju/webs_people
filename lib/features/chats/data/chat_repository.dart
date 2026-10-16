@@ -88,16 +88,25 @@ class ChatRepository {
         message: trimmedText,
       );
 
+      // The server is the authority on when the message
+      // was actually accepted. Align our local copy with
+      // its timestamp so both sides sort identically.
+      final authoritativeCreatedAt =
+          result.createdAt ?? message.createdAt;
+
       message = message.copyWith(
         serverId: result.serverMessageId,
         status: MessageStatus.sent,
+        createdAt: authoritativeCreatedAt,
       );
 
       await _database.updateMessage(message);
 
       debugPrint(
         'SEND: server accepted localId=$localId '
-        'serverId=${result.serverMessageId} status=sent',
+        'serverId=${result.serverMessageId} '
+        'createdAt=${authoritativeCreatedAt.toIso8601String()} '
+        'status=sent',
       );
 
       return message;
@@ -322,10 +331,14 @@ class ChatRepository {
         message: message.text,
       );
 
+      final authoritativeCreatedAt =
+          result.createdAt ?? message.createdAt;
+
       final updated = message.copyWith(
         serverId: result.serverMessageId,
         status: MessageStatus.sent,
         isMine: true,
+        createdAt: authoritativeCreatedAt,
       );
 
       await _database.updateMessage(updated);
@@ -342,16 +355,6 @@ class ChatRepository {
   // ===================================================================
   // DELETE
   // ===================================================================
-  //
-  // Called by ChatScreen when the user long-presses a message and
-  // chooses Delete from the actions sheet.
-  //
-  // The message is removed from the local SQLite database only.
-  // The server copy is NOT deleted — other participants still see
-  // the message, and the sender's own record is untouched.
-  //
-  // If you later want "delete for everyone", add a server-side
-  // delete endpoint and call it here as well.
 
   Future<void> deleteMessage(ChatMessage message) async {
     debugPrint('DELETE: localId=${message.localId}');

@@ -6,10 +6,12 @@ import '../../../core/storage/auth_storage.dart';
 class MessageSendResult {
   final int serverMessageId;
   final String clientMessageId;
+  final DateTime? createdAt;
 
   const MessageSendResult({
     required this.serverMessageId,
     required this.clientMessageId,
+    this.createdAt,
   });
 }
 
@@ -174,12 +176,23 @@ class MessageService {
       );
     }
 
+    final rawCreatedAt =
+        response['created_at']?.toString();
+
+    final parsedCreatedAt =
+        (rawCreatedAt == null || rawCreatedAt.isEmpty)
+            ? null
+            : DateTime.tryParse(rawCreatedAt);
+
     return MessageSendResult(
       serverMessageId:
           serverId,
 
       clientMessageId:
           returnedClientId,
+
+      createdAt:
+          parsedCreatedAt,
     );
   }
 

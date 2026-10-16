@@ -106,7 +106,15 @@ class WebRtcService {
       offer,
     );
 
-    return offer;
+    // Some flutter_webrtc builds return an offer whose
+    // .sdp is still null until setLocalDescription
+    // completes. Re-read from the connection so callers
+    // always get a populated SDP.
+    final local =
+        await _peerConnection!
+            .getLocalDescription();
+
+    return local ?? offer;
   }
 
   Future<RTCSessionDescription>
@@ -127,7 +135,11 @@ class WebRtcService {
       answer,
     );
 
-    return answer;
+    final local =
+        await _peerConnection!
+            .getLocalDescription();
+
+    return local ?? answer;
   }
 
   Future<void>

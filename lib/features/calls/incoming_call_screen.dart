@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 
@@ -38,6 +40,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
   final CallSignalingService _signaling = CallSignalingService();
 
   bool _handling = false;
+  bool _iceWired = false;
 
   @override
   void initState() {
@@ -56,6 +59,59 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     super.dispose();
   }
 
+  /// Poll the signaling endpoint until an `offer` event
+  /// arrives, or up to [timeout] elapses. On some networks
+  /// the caller's offer may take a moment to land.
+  Future<CallEvent?> _waitForOffer({
+    Duration timeout = const Duration(seconds: 3),
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+
+    while (DateTime.now().isBefore(deadline)) {
+      final events = await _signaling.getCallEvents(
+        widget.callId,
+      );
+
+      for (final event in events) {
+        if (event.event == 'offer') {
+          return event;
+        }
+      }
+
+      await Future<void>.delayed(
+        const Duration(milliseconds: 250),
+      );
+    }
+
+    return null;
+  }
+
+  /// Forward the receiver's own ICE candidates to the caller.
+  Future<void> _sendIceCandidate(
+    dynamic candidate,
+  ) async {
+    final candidateStr =
+        candidate.candidate?.toString() ?? '';
+
+    if (candidateStr.isEmpty) {
+      return;
+    }
+
+    try {
+      await _signaling.sendEvent(
+        callId: widget.callId,
+        recipientId: widget.callerId,
+        event: 'ice',
+        payload: {
+          'candidate': candidateStr,
+          'sdp_mid': candidate.sdpMid,
+          'sdp_m_line_index':
+              candidate.sdpMLineIndex,
+        },
+      );
+    } catch (_) {}
+  }
+
   Future<void> _accept() async {
     if (_handling) return;
     setState(() => _handling = true);
@@ -63,28 +119,42 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     FlutterRingtonePlayer().stop();
 
     try {
+      // 1. Tell the caller we accept.
       await _signaling.sendEvent(
         callId: widget.callId,
         recipientId: widget.callerId,
         event: 'accept',
       );
 
-      final events = await _signaling.getCallEvents(
-        widget.callId,
-      );
+      // 2. Wait for the offer (retry for up to ~3s).
+      final offerEvent = await _waitForOffer();
 
-      final offerEvent = events.firstWhere(
-        (e) => e.event == 'offer',
-        orElse: () =>
-            throw Exception('Offer not received.'),
-      );
+      if (offerEvent == null) {
+        throw Exception('Offer not received.');
+      }
 
       final sdp =
           offerEvent.payload['sdp']?.toString() ?? '';
       final type =
           offerEvent.payload['type']?.toString() ?? 'offer';
 
+      if (sdp.isEmpty) {
+        throw Exception(
+          'The offer had an empty SDP.',
+        );
+      }
+
+      // 3. Bring up our local peer connection and wire
+      //    the ICE candidate callback so our candidates
+      //    actually reach the caller.
       await _callService.webRtc.initialize();
+
+      if (!_iceWired) {
+        _callService.webRtc.onIceCandidate =
+            _sendIceCandidate;
+        _iceWired = true;
+      }
+
       await _callService.webRtc.setRemoteOffer(
         sdp: sdp,
         type: type,
@@ -93,19 +163,27 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
       final answer =
           await _callService.webRtc.createAnswer();
 
+      final answerSdp = answer.sdp ?? '';
+
+      if (answerSdp.isEmpty) {
+        throw Exception(
+          'Generated answer has an empty SDP.',
+        );
+      }
+
       await _signaling.sendEvent(
         callId: widget.callId,
         recipientId: widget.callerId,
         event: 'answer',
         payload: {
-          'sdp': answer.sdp ?? '',
+          'sdp': answerSdp,
           'type': answer.type ?? 'answer',
         },
       );
 
       await _callService.webRtc.flushPendingCandidates();
 
-      // Stop the vibration and remove the notification.
+      // 4. Stop the vibration and remove the notification.
       try {
         await NotificationService.instance
             .dismissIncomingCallNotification(widget.callId);

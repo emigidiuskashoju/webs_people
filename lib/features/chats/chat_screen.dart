@@ -11,6 +11,9 @@ import '../calls/services/call_service.dart';
 import '../map/map_screen.dart';
 import '../map/models/location_request.dart';
 import '../map/services/location_request_service.dart';
+import '../presence/models/user_presence.dart';
+import '../presence/presence_heartbeat.dart';
+import '../presence/services/presence_service.dart';
 import 'data/chat_repository.dart';
 import 'models/chat_message.dart';
 
@@ -41,11 +44,29 @@ class _ChatScreenState extends State<ChatScreen> {
   final CallService _callService = CallService();
   final LocationRequestService _locationRequestService =
       LocationRequestService();
+  final PresenceService _presenceService = PresenceService();
 
   List<ChatMessage> _messages = [];
   List<LocationRequest> _locationRequests = [];
   Timer? _locationRequestTimer;
   Timer? _statusPollTimer;
+  Timer? _presencePollTimer;
+
+  UserPresence? _presence;
+
+  /// Set to true while we believe the remote is typing in this
+  /// conversation. Updated by the presence poll.
+  bool get _remoteIsTyping {
+    final p = _presence;
+    if (p == null) return false;
+    if (!p.typing) return false;
+    return p.typingInConversation == _conversationId;
+  }
+
+  /// Tracks whether we've already told the server we're typing,
+  /// so we don't spam the endpoint on every keystroke.
+  bool _typingSignalSent = false;
+  Timer? _typingStopDebounce;
 
   bool _isLoading = true;
   bool _isStartingCall = false;
@@ -62,26 +83,83 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     ActiveConversation.instance.enter(_conversationId);
+
+    _messageController.addListener(_onComposerChanged);
+
     _loadMessages();
     _loadLocationRequests();
+    _loadPresence();
+
     _locationRequestTimer = Timer.periodic(
       const Duration(seconds: 5),
       (_) => _loadLocationRequests(silent: true),
     );
     _statusPollTimer = Timer.periodic(
       const Duration(seconds: 5),
-      (_) => _refreshMessageStatuses(),
+      (_) => _pollIncomingAndStatuses(),
+    );
+    _presencePollTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _loadPresence(),
     );
   }
 
   @override
   void dispose() {
     ActiveConversation.instance.leave(_conversationId);
+
+    // Tell the server we've stopped typing in this chat.
+    PresenceHeartbeat.instance.setTypingConversation(null);
+
+    _typingStopDebounce?.cancel();
     _locationRequestTimer?.cancel();
     _statusPollTimer?.cancel();
+    _presencePollTimer?.cancel();
+
+    _messageController.removeListener(_onComposerChanged);
     _messageController.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  // ===================================================================
+  // Typing signal
+  // ===================================================================
+
+  void _onComposerChanged() {
+    final hasText = _messageController.text.trim().isNotEmpty;
+
+    if (hasText && !_typingSignalSent) {
+      _typingSignalSent = true;
+      PresenceHeartbeat.instance
+          .setTypingConversation(_conversationId);
+    }
+
+    _typingStopDebounce?.cancel();
+
+    _typingStopDebounce = Timer(
+      const Duration(seconds: 3),
+      () {
+        if (!mounted) return;
+        if (_messageController.text.trim().isEmpty) {
+          _typingSignalSent = false;
+          PresenceHeartbeat.instance.setTypingConversation(null);
+        }
+      },
+    );
+  }
+
+  // ===================================================================
+  // Presence
+  // ===================================================================
+
+  Future<void> _loadPresence() async {
+    try {
+      final presence =
+          await _presenceService.getForUser(widget.userId);
+      if (!mounted) return;
+      setState(() => _presence = presence);
+    } catch (_) {}
   }
 
   // ===================================================================
@@ -123,6 +201,16 @@ class _ChatScreenState extends State<ChatScreen> {
       _scrollToBottom();
       await _markMessagesAsRead();
       await _syncReadReceipts();
+    } catch (_) {}
+  }
+
+  Future<void> _pollIncomingAndStatuses() async {
+    if (!mounted) return;
+    try {
+      await _receiveMessages();
+    } catch (_) {}
+    try {
+      await _refreshMessageStatuses();
     } catch (_) {}
   }
 
@@ -184,6 +272,11 @@ class _ChatScreenState extends State<ChatScreen> {
     if (text.isEmpty) return;
 
     _messageController.clear();
+
+    // Clear the typing signal immediately after sending.
+    _typingStopDebounce?.cancel();
+    _typingSignalSent = false;
+    PresenceHeartbeat.instance.setTypingConversation(null);
 
     try {
       _repository.createAndSendMessage(
@@ -931,6 +1024,32 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   // ===================================================================
+  // App bar subtitle (online / last seen / typing)
+  // ===================================================================
+
+  Widget _buildAppBarSubtitle(Color color) {
+    final label = _presence?.statusLabel(
+          isTypingHere: _remoteIsTyping,
+        ) ??
+        widget.phoneNumber;
+
+    final isTyping = _remoteIsTyping;
+
+    return Text(
+      label,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        fontSize: 12,
+        fontStyle: isTyping ? FontStyle.italic : FontStyle.normal,
+        color: isTyping
+            ? WebsColors.primaryGreen
+            : color,
+      ),
+    );
+  }
+
+  // ===================================================================
   // Build
   // ===================================================================
 
@@ -966,15 +1085,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  Text(
-                    widget.phoneNumber,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: appBarSubTextColor,
-                    ),
-                  ),
+                  _buildAppBarSubtitle(appBarSubTextColor),
                 ],
               ),
             ),
