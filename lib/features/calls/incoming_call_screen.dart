@@ -59,11 +59,8 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     super.dispose();
   }
 
-  /// Poll the signaling endpoint until an `offer` event
-  /// arrives, or up to [timeout] elapses. On some networks
-  /// the caller's offer may take a moment to land.
   Future<CallEvent?> _waitForOffer({
-    Duration timeout = const Duration(seconds: 3),
+    Duration timeout = const Duration(seconds: 5),
   }) async {
     final deadline = DateTime.now().add(timeout);
 
@@ -79,14 +76,13 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
       }
 
       await Future<void>.delayed(
-        const Duration(milliseconds: 250),
+        const Duration(milliseconds: 300),
       );
     }
 
     return null;
   }
 
-  /// Forward the receiver's own ICE candidates to the caller.
   Future<void> _sendIceCandidate(
     dynamic candidate,
   ) async {
@@ -126,7 +122,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
         event: 'accept',
       );
 
-      // 2. Wait for the offer (retry for up to ~3s).
+      // 2. Wait for the offer (retry for up to 5 s).
       final offerEvent = await _waitForOffer();
 
       if (offerEvent == null) {
@@ -183,7 +179,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
       await _callService.webRtc.flushPendingCandidates();
 
-      // 4. Stop the vibration and remove the notification.
       try {
         await NotificationService.instance
             .dismissIncomingCallNotification(widget.callId);
@@ -214,7 +209,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
     FlutterRingtonePlayer().stop();
 
-    // Stop the vibration and remove the notification.
     try {
       await NotificationService.instance
           .dismissIncomingCallNotification(widget.callId);
