@@ -20,6 +20,7 @@ import 'features/chats/services/contact_preloader.dart';
 import 'features/main/main_navigation_screen.dart';
 import 'features/presence/presence_heartbeat.dart';
 import 'features/settings/services/appearance_service.dart';
+import 'features/update/update_gate.dart';
 
 final GlobalKey<NavigatorState> websNavigatorKey =
     GlobalKey<NavigatorState>();
@@ -421,7 +422,7 @@ class _WebsAppState extends State<WebsApp> {
       ),
       routes: WebsRoutes.routes,
       onGenerateRoute: WebsRoutes.onGenerateRoute,
-      home: _buildHome(),
+      home: UpdateGate(child: _buildHome()),
       builder: (BuildContext context, Widget? child) {
         return WebsThemeScope(
           themeMode: _themeMode,

@@ -5,6 +5,8 @@ class ApiEndpoints {
   static const String health =
       '/health';
 
+  static const String appVersion = '/app/version';
+
   // ============================================================
   // AUTH
   // ============================================================
