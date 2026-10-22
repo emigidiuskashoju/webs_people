@@ -2,9 +2,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 class WebRtcService {
   RTCPeerConnection? _peerConnection;
-
   MediaStream? _localStream;
-
   final List<RTCIceCandidate> _pendingCandidates = [];
 
   final Map<String, dynamic> _configuration = {
@@ -18,16 +16,11 @@ class WebRtcService {
   };
 
   Future<void> initialize() async {
-    if (_peerConnection != null) {
-      return;
-    }
+    if (_peerConnection != null) return;
 
     _peerConnection = await createPeerConnection(
       _configuration,
-      {
-        'mandatory': {},
-        'optional': [],
-      },
+      {'mandatory': {}, 'optional': []},
     );
 
     _peerConnection!.onIceCandidate = (candidate) {
@@ -51,10 +44,7 @@ class WebRtcService {
 
   Future<void> startMicrophone() async {
     await initialize();
-
-    if (_localStream != null) {
-      return;
-    }
+    if (_localStream != null) return;
 
     _localStream = await navigator.mediaDevices.getUserMedia({
       'audio': true,
@@ -75,7 +65,6 @@ class WebRtcService {
     });
 
     await _peerConnection!.setLocalDescription(offer);
-
     return _readLocalSdpWithRetry();
   }
 
@@ -88,57 +77,35 @@ class WebRtcService {
     });
 
     await _peerConnection!.setLocalDescription(answer);
-
     return _readLocalSdpWithRetry();
   }
 
-  /// Retry `getLocalDescription()` for up to ~2 seconds
-  /// until it returns a non-null SDP.
-  ///
-  /// On some Android WebRTC builds, `getLocalDescription()`
-  /// returns null immediately after `setLocalDescription()`
-  /// because the SDP is still being generated internally.
   Future<RTCSessionDescription> _readLocalSdpWithRetry() async {
-    for (var i = 0; i < 20; i++) {
+    for (var i = 0; i < 30; i++) {
       final local = await _peerConnection!.getLocalDescription();
-
-      if (local != null &&
-          (local.sdp ?? '').isNotEmpty) {
+      if (local != null && (local.sdp ?? '').isNotEmpty) {
         return local;
       }
-
-      await Future<void>.delayed(
-        const Duration(milliseconds: 100),
-      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
     }
-
-    throw StateError(
-      'Local SDP was never populated after setLocalDescription.',
-    );
+    throw StateError('Local SDP was never populated.');
   }
 
-  Future<void> setRemoteOffer({
-    required String sdp,
-    required String type,
-  }) async {
+  Future<void> setRemoteOffer({required String sdp, required String type}) async {
     await initialize();
-
     await startMicrophone();
 
-    await _peerConnection!.setRemoteDescription(
-      RTCSessionDescription(sdp, type),
-    );
+    if (sdp.isEmpty) {
+      throw StateError('Remote SDP is empty.');
+    }
+
+    await _peerConnection!.setRemoteDescription(RTCSessionDescription(sdp, type));
   }
 
-  Future<void> setRemoteAnswer({
-    required String sdp,
-    required String type,
-  }) async {
+  Future<void> setRemoteAnswer({required String sdp, required String type}) async {
     await initialize();
-
-    await _peerConnection!.setRemoteDescription(
-      RTCSessionDescription(sdp, type),
-    );
+    if (sdp.isEmpty) throw StateError('Remote Answer SDP is empty.');
+    await _peerConnection!.setRemoteDescription(RTCSessionDescription(sdp, type));
   }
 
   Future<void> addIceCandidate(RTCIceCandidate candidate) async {
@@ -146,35 +113,21 @@ class WebRtcService {
       _pendingCandidates.add(candidate);
       return;
     }
-
-    final remoteDescription =
-        await _peerConnection!.getRemoteDescription();
-
+    final remoteDescription = await _peerConnection!.getRemoteDescription();
     if (remoteDescription == null) {
       _pendingCandidates.add(candidate);
       return;
     }
-
     await _peerConnection!.addCandidate(candidate);
   }
 
   Future<void> flushPendingCandidates() async {
-    if (_peerConnection == null) {
-      return;
-    }
+    if (_peerConnection == null) return;
+    final remoteDescription = await _peerConnection!.getRemoteDescription();
+    if (remoteDescription == null) return;
 
-    final remoteDescription =
-        await _peerConnection!.getRemoteDescription();
-
-    if (remoteDescription == null) {
-      return;
-    }
-
-    final candidates =
-        List<RTCIceCandidate>.from(_pendingCandidates);
-
+    final candidates = List<RTCIceCandidate>.from(_pendingCandidates);
     _pendingCandidates.clear();
-
     for (final candidate in candidates) {
       await _peerConnection!.addCandidate(candidate);
     }
@@ -182,52 +135,33 @@ class WebRtcService {
 
   Future<void> setMicrophoneEnabled(bool enabled) async {
     final stream = _localStream;
-
-    if (stream == null) {
-      return;
-    }
-
+    if (stream == null) return;
     for (final track in stream.getAudioTracks()) {
       track.enabled = enabled;
     }
   }
 
   Future<void> close() async {
-    final localStream = _localStream;
-
-    if (localStream != null) {
-      for (final track in localStream.getTracks()) {
+    if (_localStream != null) {
+      for (final track in _localStream!.getTracks()) {
         track.stop();
       }
-
-      await localStream.dispose();
-
+      await _localStream!.dispose();
       _localStream = null;
     }
 
-    final connection = _peerConnection;
-
-    if (connection != null) {
-      await connection.close();
-      await connection.dispose();
-
+    if (_peerConnection != null) {
+      await _peerConnection!.close();
+      await _peerConnection!.dispose();
       _peerConnection = null;
     }
-
     _pendingCandidates.clear();
   }
 
   Function(RTCIceCandidate)? onIceCandidate;
-
   Function(MediaStream)? onRemoteStream;
-
-  Function(RTCPeerConnectionState)?
-      onConnectionStateChanged;
-
-  Function(RTCIceConnectionState)?
-      onIceConnectionStateChanged;
-
+  Function(RTCPeerConnectionState)? onConnectionStateChanged;
+  Function(RTCIceConnectionState)? onIceConnectionStateChanged;
   RTCPeerConnection? get peerConnection => _peerConnection;
-
   MediaStream? get localStream => _localStream;
 }
