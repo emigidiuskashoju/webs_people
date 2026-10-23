@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
@@ -14,17 +15,29 @@ class CallService {
   final WebRtcService _webRtc;
 
   Timer? _pollTimer;
+
   String? _activeCallId;
   int? _remoteUserId;
+
   CallRecord? _activeRecord;
 
-  final ValueNotifier<CallStatus> callStatus = ValueNotifier<CallStatus>(CallStatus.calling);
+  final ValueNotifier<CallStatus> callStatus =
+      ValueNotifier<CallStatus>(
+    CallStatus.calling,
+  );
+
   String? callError;
 
-  CallService({CallRepository? repository, CallSignalingService? signaling, WebRtcService? webRtc})
-      : _repository = repository ?? CallRepository(),
-        _signaling = signaling ?? CallSignalingService(),
-        _webRtc = webRtc ?? WebRtcService();
+  CallService({
+    CallRepository? repository,
+    CallSignalingService? signaling,
+    WebRtcService? webRtc,
+  })  : _repository =
+            repository ?? CallRepository(),
+        _signaling =
+            signaling ?? CallSignalingService(),
+        _webRtc =
+            webRtc ?? WebRtcService();
 
   Future<CallRecord> startAudioCall({
     required int ownerUserId,
@@ -33,148 +46,330 @@ class CallService {
     required String recipientPhoneNumber,
   }) async {
     _remoteUserId = recipientId;
+
     callError = null;
-    callStatus.value = CallStatus.calling;
+
+    callStatus.value =
+        CallStatus.calling;
+
     CallRecord? record;
 
     try {
-      final start = await _signaling.startCall(recipientId: recipientId, type: 'audio');
+      // 1. Tell the server a call is starting. This creates
+      //    the call row so the recipient can be notified.
+      final start =
+          await _signaling.startCall(
+        recipientId: recipientId,
+        type: 'audio',
+      );
+
       _activeCallId = start.callId;
 
-      record = await _repository.createOutgoingCall(
+      record =
+          await _repository.createOutgoingCall(
         ownerUserId: ownerUserId,
         callId: start.callId,
         remoteUserId: recipientId,
         remoteName: recipientName,
-        remotePhoneNumber: recipientPhoneNumber,
+        remotePhoneNumber:
+            recipientPhoneNumber,
         type: CallType.audio,
       );
+
       _activeRecord = record;
 
-      _webRtc.onIceCandidate = _sendIceCandidate;
-      _webRtc.onConnectionStateChanged = _handleConnectionState;
-      _webRtc.onIceConnectionStateChanged = _handleIceConnectionState;
+      _webRtc.onIceCandidate =
+          _sendIceCandidate;
 
-      // 1. Initialize WebRTC and get offer
+      _webRtc.onConnectionStateChanged =
+          _handleConnectionState;
+
+      _webRtc.onIceConnectionStateChanged =
+          _handleIceConnectionState;
+
       await _webRtc.initialize();
-      final offer = await _webRtc.createOffer();
+
+      final offer =
+          await _webRtc.createOffer();
+
       final offerSdp = offer.sdp ?? '';
 
-      if (offerSdp.isEmpty) {
-        throw StateError('Generated offer has an empty SDP.');
+      // ------------------------------------------------------------
+      // DEBUG: log what the caller is about to send.
+      // ------------------------------------------------------------
+      debugPrint(
+        'CALLER: offer sdp length=${offerSdp.length}, '
+        'first 80="${offerSdp.length > 80 ? offerSdp.substring(0, 80) : offerSdp}"',
+      );
+
+      if (offerSdp.isEmpty || offerSdp == 'null') {
+        throw StateError(
+          'Generated offer has an empty SDP.',
+        );
       }
 
-      // 2. Send the offer to the receiver
       await _signaling.sendEvent(
         callId: start.callId,
         recipientId: recipientId,
         event: 'offer',
-        payload: {'sdp': offerSdp, 'type': offer.type ?? 'offer'},
+        payload: {
+          'sdp': offerSdp,
+          'type': offer.type ?? 'offer',
+        },
       );
 
-      // 3. NOW start polling so we can catch the 'accept' or 'decline'
+      // 2. Start polling after the offer is delivered, so the
+      //    receiver can find it when it starts looking.
       _startPolling();
-      callStatus.value = CallStatus.ringing;
+
+      // 3. Offer is delivered — reflect "ringing" in the UI.
+      callStatus.value =
+          CallStatus.ringing;
 
       return record;
     } catch (e) {
-      callStatus.value = CallStatus.failed;
+      callStatus.value =
+          CallStatus.failed;
+
       callError = e.toString();
+
       if (record != null) {
-        try { await _repository.markEnded(record.localId); } catch (_) {}
+        try {
+          await _repository.markEnded(
+            record.localId,
+          );
+        } catch (_) {}
       }
+
       await _webRtc.close();
+
       _pollTimer?.cancel();
       _pollTimer = null;
+
       _activeCallId = null;
       _remoteUserId = null;
       _activeRecord = null;
+
       rethrow;
     }
   }
 
   void _startPolling() {
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(milliseconds: 800), (_) async {
-      try { await _processActiveCallEvents(); } catch (_) {}
-    });
+
+    _pollTimer = Timer.periodic(
+      const Duration(
+        milliseconds: 800,
+      ),
+      (_) async {
+        try {
+          await _processActiveCallEvents();
+        } catch (_) {}
+      },
+    );
   }
 
-  Future<void> _processActiveCallEvents() async {
-    final callId = _activeCallId;
-    if (callId == null) return;
+  Future<void>
+      _processActiveCallEvents() async {
+    final callId =
+        _activeCallId;
 
-    final events = await _signaling.getCallEvents(callId);
+    if (callId == null) {
+      return;
+    }
+
+    final events =
+        await _signaling.getCallEvents(
+      callId,
+    );
+
     for (final event in events) {
       await _processEvent(event);
-      try { await _signaling.acknowledgeEvent(event.id); } catch (_) {}
+
+      try {
+        await _signaling.acknowledgeEvent(
+          event.id,
+        );
+      } catch (_) {}
     }
   }
 
-  Future<void> _processEvent(CallEvent event) async {
+  Future<void> _processEvent(
+    CallEvent event,
+  ) async {
     switch (event.event) {
-      case 'accept': await _handleAccept(event); break;
-      case 'decline': await _handleDecline(event); break;
-      case 'end': await _handleRemoteEnd(event); break;
-      case 'answer': await _handleAnswer(event); break;
-      case 'ice': await _handleIce(event); break;
+      case 'accept':
+        await _handleAccept(event);
+        break;
+
+      case 'decline':
+        await _handleDecline(event);
+        break;
+
+      case 'end':
+        await _handleRemoteEnd(event);
+        break;
+
+      case 'answer':
+        await _handleAnswer(event);
+        break;
+
+      case 'ice':
+        await _handleIce(event);
+        break;
     }
   }
 
-  Future<void> _handleAccept(CallEvent event) async {
-    final record = _activeRecord;
-    if (record == null) return;
-    callStatus.value = CallStatus.connecting;
-    await _repository.updateStatus(localId: record.localId, status: CallStatus.connecting);
+  Future<void> _handleAccept(
+    CallEvent event,
+  ) async {
+    final record =
+        _activeRecord;
+
+    if (record == null) {
+      return;
+    }
+
+    callStatus.value =
+        CallStatus.connecting;
+
+    await _repository.updateStatus(
+      localId: record.localId,
+      status: CallStatus.connecting,
+    );
   }
 
-  Future<void> _handleDecline(CallEvent event) async {
-    final record = _activeRecord;
-    if (record == null) return;
-    callStatus.value = CallStatus.declined;
-    await _repository.markDeclined(record.localId);
-    await stop(preserveStatus: true);
+  Future<void> _handleDecline(
+    CallEvent event,
+  ) async {
+    final record =
+        _activeRecord;
+
+    if (record == null) {
+      return;
+    }
+
+    callStatus.value =
+        CallStatus.declined;
+
+    await _repository.markDeclined(
+      record.localId,
+    );
+
+    await stop(
+      preserveStatus: true,
+    );
   }
 
-  Future<void> _handleRemoteEnd(CallEvent event) async {
-    final record = _activeRecord;
-    if (record == null) return;
-    callStatus.value = CallStatus.ended;
-    await _repository.markEnded(record.localId);
-    await stop(preserveStatus: true);
+  Future<void> _handleRemoteEnd(
+    CallEvent event,
+  ) async {
+    final record =
+        _activeRecord;
+
+    if (record == null) {
+      return;
+    }
+
+    callStatus.value =
+        CallStatus.ended;
+
+    await _repository.markEnded(
+      record.localId,
+    );
+
+    await stop(
+      preserveStatus: true,
+    );
   }
 
-  Future<void> _handleAnswer(CallEvent event) async {
-    final sdp = event.payload['sdp']?.toString();
-    final type = event.payload['type']?.toString();
-    if (sdp == null || sdp.isEmpty || type == null || type.isEmpty) return;
+  Future<void> _handleAnswer(
+    CallEvent event,
+  ) async {
+    final sdp =
+        event.payload['sdp']
+            ?.toString();
 
-    await _webRtc.setRemoteAnswer(sdp: sdp, type: type);
+    final type =
+        event.payload['type']
+            ?.toString();
+
+    if (sdp == null ||
+        sdp.isEmpty ||
+        sdp == 'null' ||
+        type == null ||
+        type.isEmpty) {
+      return;
+    }
+
+    await _webRtc.setRemoteAnswer(
+      sdp: sdp,
+      type: type,
+    );
+
     await _webRtc.flushPendingCandidates();
 
-    final record = _activeRecord;
+    final record =
+        _activeRecord;
+
     if (record != null) {
-      await _repository.markConnected(record.localId);
+      await _repository.markConnected(
+        record.localId,
+      );
     }
-    callStatus.value = CallStatus.connected;
+
+    callStatus.value =
+        CallStatus.connected;
   }
 
-  Future<void> _handleIce(CallEvent event) async {
-    final candidate = event.payload['candidate']?.toString();
-    final sdpMid = event.payload['sdp_mid']?.toString();
-    final rawMLineIndex = event.payload['sdp_m_line_index'];
-    if (candidate == null || candidate.isEmpty) return;
+  Future<void> _handleIce(
+    CallEvent event,
+  ) async {
+    final candidate =
+        event.payload['candidate']
+            ?.toString();
+
+    final sdpMid =
+        event.payload['sdp_mid']
+            ?.toString();
+
+    final rawMLineIndex =
+        event.payload['sdp_m_line_index'];
+
+    if (candidate == null ||
+        candidate.isEmpty) {
+      return;
+    }
 
     int? sdpMLineIndex;
-    if (rawMLineIndex is int) sdpMLineIndex = rawMLineIndex;
 
-    await _webRtc.addIceCandidate(RTCIceCandidate(candidate, sdpMid, sdpMLineIndex));
+    if (rawMLineIndex is int) {
+      sdpMLineIndex =
+          rawMLineIndex;
+    }
+
+    await _webRtc.addIceCandidate(
+      RTCIceCandidate(
+        candidate,
+        sdpMid,
+        sdpMLineIndex,
+      ),
+    );
   }
 
-  Future<void> _sendIceCandidate(RTCIceCandidate candidate) async {
-    final callId = _activeCallId;
-    final remoteUserId = _remoteUserId;
-    if (callId == null || remoteUserId == null) return;
+  Future<void> _sendIceCandidate(
+    RTCIceCandidate candidate,
+  ) async {
+    final callId =
+        _activeCallId;
+
+    final remoteUserId =
+        _remoteUserId;
+
+    if (callId == null ||
+        remoteUserId == null) {
+      return;
+    }
 
     try {
       await _signaling.sendEvent(
@@ -182,78 +377,173 @@ class CallService {
         recipientId: remoteUserId,
         event: 'ice',
         payload: {
-          'candidate': candidate.candidate ?? '',
-          'sdp_mid': candidate.sdpMid,
-          'sdp_m_line_index': candidate.sdpMLineIndex,
+          'candidate':
+              candidate.candidate ?? '',
+          'sdp_mid':
+              candidate.sdpMid,
+          'sdp_m_line_index':
+              candidate.sdpMLineIndex,
         },
       );
     } catch (_) {}
   }
 
-  void _handleConnectionState(RTCPeerConnectionState state) {
+  void _handleConnectionState(
+    RTCPeerConnectionState state,
+  ) {
     switch (state) {
-      case RTCPeerConnectionState.RTCPeerConnectionStateConnecting:
-        callStatus.value = CallStatus.connecting; break;
-      case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
-        callStatus.value = CallStatus.connected;
-        final record = _activeRecord;
-        if (record != null) unawaited(_repository.markConnected(record.localId)); break;
-      case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
-        callStatus.value = CallStatus.failed;
-        callError = 'The audio connection failed.'; break;
-      default: break;
+      case RTCPeerConnectionState
+            .RTCPeerConnectionStateNew:
+        break;
+
+      case RTCPeerConnectionState
+            .RTCPeerConnectionStateConnecting:
+        callStatus.value =
+            CallStatus.connecting;
+        break;
+
+      case RTCPeerConnectionState
+            .RTCPeerConnectionStateConnected:
+        callStatus.value =
+            CallStatus.connected;
+
+        final record =
+            _activeRecord;
+
+        if (record != null) {
+          unawaited(
+            _repository.markConnected(
+              record.localId,
+            ),
+          );
+        }
+        break;
+
+      case RTCPeerConnectionState
+            .RTCPeerConnectionStateDisconnected:
+        break;
+
+      case RTCPeerConnectionState
+            .RTCPeerConnectionStateFailed:
+        callStatus.value =
+            CallStatus.failed;
+
+        callError =
+            'The audio connection failed.';
+        break;
+
+      case RTCPeerConnectionState
+            .RTCPeerConnectionStateClosed:
+        break;
     }
   }
 
-  void _handleIceConnectionState(RTCIceConnectionState state) {
+  void _handleIceConnectionState(
+    RTCIceConnectionState state,
+  ) {
     switch (state) {
-      case RTCIceConnectionState.RTCIceConnectionStateChecking:
-        callStatus.value = CallStatus.connecting; break;
-      case RTCIceConnectionState.RTCIceConnectionStateConnected:
-      case RTCIceConnectionState.RTCIceConnectionStateCompleted:
-        callStatus.value = CallStatus.connected; break;
-      case RTCIceConnectionState.RTCIceConnectionStateFailed:
-        callStatus.value = CallStatus.failed;
-        callError = 'The network connection could not be established.'; break;
-      default: break;
+      case RTCIceConnectionState
+            .RTCIceConnectionStateChecking:
+        callStatus.value =
+            CallStatus.connecting;
+        break;
+
+      case RTCIceConnectionState
+            .RTCIceConnectionStateConnected:
+      case RTCIceConnectionState
+            .RTCIceConnectionStateCompleted:
+        callStatus.value =
+            CallStatus.connected;
+        break;
+
+      case RTCIceConnectionState
+            .RTCIceConnectionStateFailed:
+        callStatus.value =
+            CallStatus.failed;
+
+        callError =
+            'The network connection could not be established.';
+        break;
+
+      default:
+        break;
     }
   }
 
   Future<void> endCall() async {
-    final callId = _activeCallId;
-    final remoteUserId = _remoteUserId;
-    final record = _activeRecord;
+    final callId =
+        _activeCallId;
 
+    final remoteUserId =
+        _remoteUserId;
+
+    final record =
+        _activeRecord;
+
+    // Stop any lingering call notification vibration.
     if (callId != null) {
-      try { await NotificationService.instance.dismissIncomingCallNotification(callId); } catch (_) {}
+      try {
+        await NotificationService.instance
+            .dismissIncomingCallNotification(callId);
+      } catch (_) {}
     }
-    if (callId != null && remoteUserId != null) {
-      try { await _signaling.sendEvent(callId: callId, recipientId: remoteUserId, event: 'end'); } catch (_) {}
+
+    if (callId != null &&
+        remoteUserId != null) {
+      try {
+        await _signaling.sendEvent(
+          callId: callId,
+          recipientId: remoteUserId,
+          event: 'end',
+        );
+      } catch (_) {}
     }
+
     if (record != null) {
-      await _repository.markEnded(record.localId);
+      await _repository.markEnded(
+        record.localId,
+      );
     }
-    callStatus.value = CallStatus.ended;
-    await stop(preserveStatus: true);
+
+    callStatus.value =
+        CallStatus.ended;
+
+    await stop(
+      preserveStatus: true,
+    );
   }
 
-  Future<void> stop({bool preserveStatus = false}) async {
+  Future<void> stop({
+    bool preserveStatus = false,
+  }) async {
     _pollTimer?.cancel();
     _pollTimer = null;
+
     await _webRtc.close();
+
     _activeCallId = null;
     _remoteUserId = null;
     _activeRecord = null;
-    if (!preserveStatus) callStatus.value = CallStatus.ended;
+
+    if (!preserveStatus) {
+      callStatus.value =
+          CallStatus.ended;
+    }
   }
 
-  CallRecord? get activeRecord => _activeRecord;
-  String? get activeCallId => _activeCallId;
-  WebRtcService get webRtc => _webRtc;
+  CallRecord? get activeRecord =>
+      _activeRecord;
+
+  String? get activeCallId =>
+      _activeCallId;
+
+  WebRtcService get webRtc =>
+      _webRtc;
 
   void dispose() {
     _pollTimer?.cancel();
     _pollTimer = null;
+
     callStatus.dispose();
   }
 }

@@ -31,7 +31,8 @@ class IncomingCallScreen extends StatefulWidget {
   State<IncomingCallScreen> createState() => _IncomingCallScreenState();
 }
 
-class _IncomingCallScreenState extends State<IncomingCallScreen> with SingleTickerProviderStateMixin {
+class _IncomingCallScreenState extends State<IncomingCallScreen>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _pulseController;
   final CallService _callService = CallService();
   final CallSignalingService _signaling = CallSignalingService();
@@ -42,7 +43,10 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> with SingleTick
   @override
   void initState() {
     super.initState();
-    _pulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500))..repeat();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat();
   }
 
   @override
@@ -52,7 +56,9 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> with SingleTick
     super.dispose();
   }
 
-  Future<CallEvent?> _waitForOffer({Duration timeout = const Duration(seconds: 5)}) async {
+  Future<CallEvent?> _waitForOffer({
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
       final events = await _signaling.getCallEvents(widget.callId);
@@ -67,7 +73,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> with SingleTick
   Future<void> _sendIceCandidate(dynamic candidate) async {
     final candidateStr = candidate.candidate?.toString() ?? '';
     if (candidateStr.isEmpty) return;
-
     try {
       await _signaling.sendEvent(
         callId: widget.callId,
@@ -89,15 +94,32 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> with SingleTick
     FlutterRingtonePlayer().stop();
 
     try {
-      await _signaling.sendEvent(callId: widget.callId, recipientId: widget.callerId, event: 'accept');
-      
+      await _signaling.sendEvent(
+        callId: widget.callId,
+        recipientId: widget.callerId,
+        event: 'accept',
+      );
+
       final offerEvent = await _waitForOffer();
       if (offerEvent == null) throw Exception('Offer not received.');
 
-      final sdp = offerEvent.payload['sdp']?.toString() ?? '';
+      final rawSdp = offerEvent.payload['sdp'];
+      final sdp = rawSdp?.toString() ?? '';
       final type = offerEvent.payload['type']?.toString() ?? 'offer';
 
-      if (sdp.isEmpty) throw Exception('The offer had an empty SDP.');
+      debugPrint(
+        'INCOMING-CALL: rawSdp runtimeType=${rawSdp.runtimeType}, '
+        'rawSdp="$rawSdp", '
+        'sdp length=${sdp.length}, '
+        'sdp first 80="${sdp.length > 80 ? sdp.substring(0, 80) : sdp}", '
+        'type=$type',
+      );
+
+      if (sdp.isEmpty || sdp == 'null') {
+        throw Exception(
+          'The offer had an empty SDP (raw="$rawSdp").',
+        );
+      }
 
       await _callService.webRtc.initialize();
       if (!_iceWired) {
@@ -106,6 +128,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> with SingleTick
       }
 
       await _callService.webRtc.setRemoteOffer(sdp: sdp, type: type);
+
       final answer = await _callService.webRtc.createAnswer();
       final answerSdp = answer.sdp ?? '';
       if (answerSdp.isEmpty) throw Exception('Generated answer has an empty SDP.');
@@ -120,18 +143,26 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> with SingleTick
       await _callService.webRtc.flushPendingCandidates();
 
       try {
-        await NotificationService.instance.dismissIncomingCallNotification(widget.callId);
+        await NotificationService.instance
+            .dismissIncomingCallNotification(widget.callId);
       } catch (_) {}
 
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => AudioCallScreen(callService: _callService, callRecord: widget.record)),
+        MaterialPageRoute(
+          builder: (_) => AudioCallScreen(
+            callService: _callService,
+            callRecord: widget.record,
+          ),
+        ),
       );
     } catch (e) {
       debugPrint('INCOMING-CALL: accept failed: $e');
       if (!mounted) return;
       setState(() => _handling = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Unable to accept call: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to accept call: $e')),
+      );
     }
   }
 
@@ -140,22 +171,26 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> with SingleTick
     setState(() => _handling = true);
 
     FlutterRingtonePlayer().stop();
-
     try {
-      await NotificationService.instance.dismissIncomingCallNotification(widget.callId);
+      await NotificationService.instance
+          .dismissIncomingCallNotification(widget.callId);
     } catch (_) {}
-
     try {
-      await _signaling.sendEvent(callId: widget.callId, recipientId: widget.callerId, event: 'decline');
+      await _signaling.sendEvent(
+        callId: widget.callId,
+        recipientId: widget.callerId,
+        event: 'decline',
+      );
     } catch (_) {}
-
     if (!mounted) return;
     Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
-    final displayName = widget.callerName.trim().isEmpty ? widget.callerPhone : widget.callerName;
+    final displayName = widget.callerName.trim().isEmpty
+        ? widget.callerPhone
+        : widget.callerName;
     String initial = '?';
     if (displayName.trim().isNotEmpty) initial = displayName.trim()[0].toUpperCase();
 
@@ -192,7 +227,11 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> with SingleTick
                           backgroundColor: WebsColors.softGreen(context),
                           child: Text(
                             initial,
-                            style: const TextStyle(fontSize: 42, fontWeight: FontWeight.w600, color: WebsColors.primaryGreen),
+                            style: const TextStyle(
+                              fontSize: 42,
+                              fontWeight: FontWeight.w600,
+                              color: WebsColors.primaryGreen,
+                            ),
                           ),
                         ),
                       ],
@@ -234,13 +273,21 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> with SingleTick
         height: 140,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          border: Border.all(color: WebsColors.primaryGreen.withValues(alpha: opacity), width: 2),
+          border: Border.all(
+            color: WebsColors.primaryGreen.withValues(alpha: opacity),
+            width: 2,
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildButton({required IconData icon, required Color color, required String label, required VoidCallback? onTap}) {
+  Widget _buildButton({
+    required IconData icon,
+    required Color color,
+    required String label,
+    required VoidCallback? onTap,
+  }) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -250,7 +297,11 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> with SingleTick
           child: InkWell(
             customBorder: const CircleBorder(),
             onTap: onTap,
-            child: SizedBox(width: 68, height: 68, child: Icon(icon, size: 30, color: Colors.white)),
+            child: SizedBox(
+              width: 68,
+              height: 68,
+              child: Icon(icon, size: 30, color: Colors.white),
+            ),
           ),
         ),
         const SizedBox(height: 12),
