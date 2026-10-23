@@ -8,9 +8,7 @@ class WebRtcService {
   final Map<String, dynamic> _configuration = {
     'iceServers': [
       {
-        'urls': [
-          'stun:stun.l.google.com:19302',
-        ],
+        'urls': ['stun:stun.l.google.com:19302'],
       },
     ],
   };
@@ -91,7 +89,19 @@ class WebRtcService {
     throw StateError('Local SDP was never populated.');
   }
 
-  Future<void> setRemoteOffer({required String sdp, required String type}) async {
+  /// Normalize SDP line endings to \r\n as required by WebRTC.
+  String _normalizeSdp(String sdp) {
+    // Replace all line endings with \r\n
+    return sdp
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n')
+        .replaceAll('\n', '\r\n');
+  }
+
+  Future<void> setRemoteOffer({
+    required String sdp,
+    required String type,
+  }) async {
     await initialize();
     await startMicrophone();
 
@@ -99,13 +109,26 @@ class WebRtcService {
       throw StateError('Remote SDP is empty.');
     }
 
-    await _peerConnection!.setRemoteDescription(RTCSessionDescription(sdp, type));
+    final normalizedSdp = _normalizeSdp(sdp);
+    final description = RTCSessionDescription(normalizedSdp, type);
+
+    await _peerConnection!.setRemoteDescription(description);
   }
 
-  Future<void> setRemoteAnswer({required String sdp, required String type}) async {
+  Future<void> setRemoteAnswer({
+    required String sdp,
+    required String type,
+  }) async {
     await initialize();
-    if (sdp.isEmpty) throw StateError('Remote Answer SDP is empty.');
-    await _peerConnection!.setRemoteDescription(RTCSessionDescription(sdp, type));
+
+    if (sdp.isEmpty) {
+      throw StateError('Remote Answer SDP is empty.');
+    }
+
+    final normalizedSdp = _normalizeSdp(sdp);
+    final description = RTCSessionDescription(normalizedSdp, type);
+
+    await _peerConnection!.setRemoteDescription(description);
   }
 
   Future<void> addIceCandidate(RTCIceCandidate candidate) async {
@@ -149,7 +172,6 @@ class WebRtcService {
       await _localStream!.dispose();
       _localStream = null;
     }
-
     if (_peerConnection != null) {
       await _peerConnection!.close();
       await _peerConnection!.dispose();
