@@ -10,6 +10,14 @@ class LocationTrackingService {
   int? _deviceId;
   int? _requestId;
 
+  /// Re-broadcasts raw position updates to anyone listening.
+  /// Used by the Finding screen to draw a route from the user's
+  /// own position to the device being tracked.
+  final StreamController<Position> _positionController =
+      StreamController<Position>.broadcast();
+
+  Position? _latestPosition;
+
   final LocationRequestService _requestService = LocationRequestService();
 
   bool get isTracking => _subscription != null;
@@ -17,6 +25,14 @@ class LocationTrackingService {
   int? get deviceId => _deviceId;
 
   int? get requestId => _requestId;
+
+  /// The most recent position received from the GPS stream.
+  /// Null until the first fix arrives.
+  Position? get latestPosition => _latestPosition;
+
+  /// Broadcast stream of raw position updates. Emits on the same
+  /// cadence as the underlying GPS stream (distanceFilter: 10m).
+  Stream<Position> get positionStream => _positionController.stream;
 
   /// Start tracking.
   ///
@@ -71,10 +87,18 @@ class LocationTrackingService {
   }
 
   Future<void> _onPosition(Position position) async {
+    _latestPosition = position;
+
+    // Fan out to any listeners (Finding screen uses this to
+    // refresh the route start point).
+    if (!_positionController.isClosed) {
+      _positionController.add(position);
+    }
+
     final requestId = _requestId;
 
     // If we're only tracking a device (Security flow), the
-    // heartbeat service handles the upload. Nothing to do here.
+    // heartbeat service handles the upload. Nothing else to do.
     if (requestId == null) return;
 
     try {
@@ -105,6 +129,17 @@ class LocationTrackingService {
     _subscription = null;
     _deviceId = null;
     _requestId = null;
+    // NOTE: we intentionally do NOT close _positionController
+    // here. The screen may still be listening after stop() (e.g.
+    // during rebuild), and closing would kill its subscription.
+    // The controller is closed only in dispose() below.
+  }
+
+  /// Call this when the service is no longer needed for the app's
+  /// lifetime (currently: never, because the service is a fresh
+  /// instance per screen). Kept for symmetry with other services.
+  void dispose() {
+    _positionController.close();
   }
 
   Future<bool> _ensurePermission() async {

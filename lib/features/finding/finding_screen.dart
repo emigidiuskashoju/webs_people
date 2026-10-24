@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../../core/theme/webs_colors.dart';
 import '../../shared/widgets/webs_background.dart';
@@ -42,6 +43,11 @@ class _FindingScreenState extends State<FindingScreen> {
   String? _trackingError;
 
   Timer? _autoRefreshTimer;
+  StreamSubscription<Position>? _positionSubscription;
+
+  /// The user's own last-known position, used to draw the red
+  /// route to the tracked device on the map.
+  Position? _myPosition;
 
   @override
   void initState() {
@@ -51,6 +57,15 @@ class _FindingScreenState extends State<FindingScreen> {
       const Duration(seconds: 10),
       (_) => _reloadRecoveryDataSilently(),
     );
+    _subscribeToOwnPosition();
+  }
+
+  void _subscribeToOwnPosition() {
+    _positionSubscription =
+        _trackingService.positionStream.listen((position) {
+      if (!mounted) return;
+      setState(() => _myPosition = position);
+    });
   }
 
   bool _isLocationTrustworthy(RecoveryDevice device) {
@@ -125,6 +140,13 @@ class _FindingScreenState extends State<FindingScreen> {
     try {
       setState(() => _trackingError = null);
       await _trackingService.start(deviceId: device.id);
+
+      // Seed _myPosition from whatever the service already has.
+      final latest = _trackingService.latestPosition;
+      if (latest != null && mounted) {
+        setState(() => _myPosition = latest);
+      }
+
       await _reloadRecoveryDataSilently();
     } catch (e) {
       if (!mounted) return;
@@ -563,6 +585,8 @@ class _FindingScreenState extends State<FindingScreen> {
       );
     }
 
+    final mine = _myPosition;
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(20),
       child: SizedBox(
@@ -574,6 +598,9 @@ class _FindingScreenState extends State<FindingScreen> {
                 latitude: device.latitude!,
                 longitude: device.longitude!,
                 accuracy: device.accuracy,
+                deviceName: device.name,
+                userLatitude: mine?.latitude,
+                userLongitude: mine?.longitude,
               ),
             ),
             if (device.isLost)
@@ -946,6 +973,7 @@ class _FindingScreenState extends State<FindingScreen> {
   @override
   void dispose() {
     _autoRefreshTimer?.cancel();
+    _positionSubscription?.cancel();
     _heartbeatService.dispose();
     _trackingService.stop();
     super.dispose();

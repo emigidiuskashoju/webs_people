@@ -6,8 +6,6 @@ import 'package:flutter/services.dart';
 import '../../core/notifications/active_conversation.dart';
 import '../../core/theme/webs_colors.dart';
 import '../../core/widgets/cached_avatar.dart';
-import '../calls/audio_call_screen.dart';
-import '../calls/services/call_service.dart';
 import '../map/map_screen.dart';
 import '../map/models/location_request.dart';
 import '../map/services/location_request_service.dart';
@@ -41,7 +39,6 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final ChatRepository _repository = ChatRepository();
-  final CallService _callService = CallService();
   final LocationRequestService _locationRequestService =
       LocationRequestService();
   final PresenceService _presenceService = PresenceService();
@@ -69,7 +66,6 @@ class _ChatScreenState extends State<ChatScreen> {
   Timer? _typingStopDebounce;
 
   bool _isLoading = true;
-  bool _isStartingCall = false;
   bool _isHandlingLocationRequest = false;
 
   String get _conversationId {
@@ -535,39 +531,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String _cleanError(Object error) {
     return error.toString().replaceFirst('Exception: ', '');
-  }
-
-  // ===================================================================
-  // Audio call
-  // ===================================================================
-
-  Future<void> _startAudioCall() async {
-    if (_isStartingCall) return;
-    setState(() => _isStartingCall = true);
-    try {
-      final record = await _callService.startAudioCall(
-        ownerUserId: widget.currentUserId,
-        recipientId: widget.userId,
-        recipientName: widget.name,
-        recipientPhoneNumber: widget.phoneNumber,
-      );
-      if (!mounted) return;
-      await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => AudioCallScreen(
-            callService: _callService,
-            callRecord: record,
-          ),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Unable to start audio call: $e')),
-      );
-    } finally {
-      if (mounted) setState(() => _isStartingCall = false);
-    }
   }
 
   // ===================================================================
@@ -1091,25 +1054,6 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ],
         ),
-        actions: [
-          _isStartingCall
-              ? Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: appBarTextColor,
-                    ),
-                  ),
-                )
-              : IconButton(
-                  tooltip: 'Audio call',
-                  onPressed: _startAudioCall,
-                  icon: const Icon(Icons.call),
-                ),
-        ],
       ),
       body: Column(
         children: [

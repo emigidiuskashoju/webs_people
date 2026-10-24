@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/webs_colors.dart';
 import '../auth/screens/login_screen.dart';
-import '../calls/call_history_screen.dart';
 import '../chats/chats_screen.dart';
 import '../chats/models/preloaded_chats_data.dart';
 import '../settings/settings_screen.dart';
@@ -30,19 +29,24 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   late final List<Widget> _screens;
 
+  /// Index of the Security destination in the bottom bar.
+  /// It is not a real screen — tapping it opens the login
+  /// screen — so we track its position here to keep
+  /// [_onNavigationItemTapped] in sync with the bar.
+  static const int _securityTabIndex = 2;
+
   @override
   void initState() {
     super.initState();
 
     _screens = [
       ChatsScreen(preloaded: widget.preloadedChats),
-      const CallHistoryScreen(),
       const SettingsScreen(),
     ];
   }
 
   void _onNavigationItemTapped(int index) {
-    if (index == 3) {
+    if (index == _securityTabIndex) {
       _openSecurityLogin();
       return;
     }
@@ -77,11 +81,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             icon: Icon(Icons.chat_bubble_outline),
             selectedIcon: Icon(Icons.chat_bubble),
             label: 'Chats',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.call_outlined),
-            selectedIcon: Icon(Icons.call),
-            label: 'Calls',
           ),
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),

@@ -169,6 +169,11 @@ class ApiEndpoints {
   ) =>
       '/location/requests/$requestId/location';
 
+  static String endLocationRequest(
+    int requestId,
+  ) =>
+      '/location/requests/$requestId/end';
+
   static const String customRoutes =
       '/location/custom-routes';
 
@@ -216,34 +221,8 @@ class ApiEndpoints {
       '/messages/read-receipts/$receiptId/ack';
 
   // ============================================================
-  // CALLS
+  // PUSH NOTIFICATIONS (FCM)
   // ============================================================
 
-  static const String startCall =
-      '/calls/start';
-
-  static const String pendingCallEvents =
-      '/calls/pending';
-
-  static String callEvents(
-    String callId,
-  ) =>
-      '/calls/$callId/events';
-
-  static String sendCallEvent(
-    String callId,
-  ) =>
-      '/calls/$callId/event';
-
-  static String acknowledgeCallEvent(
-    int eventId,
-  ) =>
-      '/calls/events/$eventId/ack';
-
   static const String fcmToken = '/fcm-token';
-
-  static String endLocationRequest(
-    int requestId,
-  ) =>
-      '/location/requests/$requestId/end';
 }

@@ -11,9 +11,6 @@ import 'core/notifications/location_notification_listener.dart';
 import 'core/notifications/notification_service.dart';
 import 'core/storage/auth_storage.dart';
 import 'features/auth/screens/register_screen.dart';
-import 'features/calls/incoming_call_screen.dart';
-import 'features/calls/models/call_record.dart';
-import 'features/calls/services/call_incoming_listener.dart';
 import 'features/chats/chat_screen.dart';
 import 'features/chats/models/preloaded_chats_data.dart';
 import 'features/chats/services/contact_preloader.dart';
@@ -55,12 +52,6 @@ Future<void> _initializeBackgroundServices() async {
     await FcmService.instance.initialize();
   } catch (e) {
     debugPrint('FCM: initialisation failed: $e');
-  }
-
-  try {
-    await CallIncomingListener.instance.initialize(websNavigatorKey);
-  } catch (e) {
-    debugPrint('CALL-LISTENER: initialisation failed: $e');
   }
 
   try {
@@ -110,7 +101,6 @@ class _WebsAppState extends State<WebsApp> {
 
   StreamSubscription<String>? _localNotificationTapSubscription;
   StreamSubscription<String>? _fcmTapSubscription;
-  StreamSubscription<String>? _callTapSubscription;
   StreamSubscription<String>? _locationTapSubscription;
 
   @override
@@ -121,7 +111,6 @@ class _WebsAppState extends State<WebsApp> {
     _preloadChats();
     _loadToken();
     _listenForNotificationTaps();
-    _listenForCallTaps();
     _listenForLocationTaps();
   }
 
@@ -129,7 +118,6 @@ class _WebsAppState extends State<WebsApp> {
   void dispose() {
     _localNotificationTapSubscription?.cancel();
     _fcmTapSubscription?.cancel();
-    _callTapSubscription?.cancel();
     _locationTapSubscription?.cancel();
     super.dispose();
   }
@@ -245,65 +233,6 @@ class _WebsAppState extends State<WebsApp> {
     }
 
     return _preloadedChats;
-  }
-
-  // ============================================================
-  // CALL TAPS
-  // ============================================================
-
-  void _listenForCallTaps() {
-    _callTapSubscription =
-        NotificationService.instance.callTaps.listen((payload) {
-      _handleCallTap(payload);
-    });
-  }
-
-  void _handleCallTap(String payload) {
-    final parts = payload.split(':');
-    if (parts.length < 4) return;
-
-    final callId = parts[0];
-    final callerId = int.tryParse(parts[1]);
-    final callerName = parts[2];
-    final callerPhone = parts.sublist(3).join(':');
-
-    if (callerId == null) return;
-
-    final currentUserId = _preloadedChats?.currentUserId;
-    if (currentUserId == null) return;
-
-    final navigator = websNavigatorKey.currentState;
-    if (navigator == null) return;
-
-    final record = CallRecord(
-      localId: callId,
-      ownerUserId: currentUserId,
-      callId: callId,
-      remoteUserId: callerId,
-      remoteName: callerName,
-      remotePhoneNumber: callerPhone,
-      type: CallType.audio,
-      direction: CallDirection.incoming,
-      status: CallStatus.ringing,
-      startedAt: DateTime.now(),
-      answeredAt: null,
-      endedAt: null,
-      durationSeconds: 0,
-    );
-
-    navigator.push(
-      MaterialPageRoute(
-        fullscreenDialog: true,
-        builder: (_) => IncomingCallScreen(
-          callId: callId,
-          callerId: callerId,
-          callerName: callerName,
-          callerPhone: callerPhone,
-          type: 'audio',
-          record: record,
-        ),
-      ),
-    );
   }
 
   // ============================================================
