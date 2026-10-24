@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -24,10 +25,12 @@ import 'services/custom_route_progress.dart';
 import 'services/custom_route_service.dart';
 import 'services/place_search_service.dart';
 import 'services/place_routing_service.dart';
+import 'widgets/destination_route_bar.dart';
 import 'widgets/location_ticker.dart';
 import 'widgets/map_style_sheet.dart';
 import 'widgets/photo_marker.dart';
 import 'widgets/place_search_card.dart';
+import 'widgets/route_flow_dots.dart';
 
 class MapScreen extends StatefulWidget {
   final int currentUserId;
@@ -53,8 +56,25 @@ class _MapScreenState extends State<MapScreen> {
   static const String _bgApiBase = 'http://134.209.65.175/api/v1';
 
   static const double _maxAcceptableAccuracyMeters = 100.0;
-  static const double _offRouteThresholdMeters = 40.0;
-  static const Duration _offRouteGracePeriod = Duration(seconds: 3);
+
+  // ------------------------------------------------------------
+  // Marker geometry (unchanged from the marker-drift fix)
+  // ------------------------------------------------------------
+  static const double _pinCircleDiameter = 44.0;
+  static const double _pinTailHeight = 16.0;
+  static const double _pinBoxWidth = 44.0;
+  static const double _pinBoxHeight =
+      _pinCircleDiameter + _pinTailHeight;
+
+  // ------------------------------------------------------------
+  // Direction-dot tuning
+  // ------------------------------------------------------------
+  // Two golden dots per the request. Bump to 3–5 later if you want
+  // a denser trail without touching any other code.
+  static const int _routeDotCount = 2;
+
+  // How fast the dots slide on screen. Higher = more urgent.
+  static const double _routeDotPixelsPerSecond = 70.0;
 
   final MapController _mapController = MapController();
   final MapLocationService _locationService = MapLocationService();
@@ -77,13 +97,11 @@ class _MapScreenState extends State<MapScreen> {
   double? _destinationRemainingSeconds;
   LatLng? _lastRouteOrigin;
 
-  DateTime? _offRouteSince;
-  bool _routeRecalculating = false;
+  /// True while a manual reroute (button tap) is in-flight.
+  bool _destinationRerouting = false;
 
-  Timer? _destinationRecalcTimer;
-
-  LocationTickerData _tickerData = const LocationTickerData();
   Timer? _reverseGeocodeTimer;
+  LocationTickerData _tickerData = const LocationTickerData();
   String? _lastTickerPlaceLabel;
 
   LocationTickerData _otherTickerData = const LocationTickerData();
@@ -91,7 +109,6 @@ class _MapScreenState extends State<MapScreen> {
   String? _lastOtherTickerPlaceLabel;
 
   Timer? _otherLocationPollTimer;
-  DateTime? _lastOtherFetchAt;
 
   Timer? _freshnessTickTimer;
 
@@ -100,7 +117,7 @@ class _MapScreenState extends State<MapScreen> {
   LatLng? _otherLocation;
   double? _otherAccuracy;
   DateTime? _otherLocationUpdatedAt;
-  bool _loading = true;
+
   bool _requesting = false;
   bool _refreshingOther = false;
   String? _error;
@@ -115,7 +132,7 @@ class _MapScreenState extends State<MapScreen> {
   LocationRequest? _activeRequest;
   List<RoutePoint> _routePoints = [];
   List<LatLng> _routeGeometry = [];
-  bool _routeLoading = false;
+  bool _otherRouteLoading = false;
 
   Timer? _customRouteTimer;
   CustomRoute? _customRoute;
@@ -136,11 +153,6 @@ class _MapScreenState extends State<MapScreen> {
     _customRouteTimer = Timer.periodic(
       const Duration(seconds: 5),
       (_) => _loadSharedCustomRoute(silent: true),
-    );
-
-    _destinationRecalcTimer = Timer.periodic(
-      const Duration(seconds: 2),
-      (_) => _maybeRecalcDestinationRoute(),
     );
 
     _reverseGeocodeTimer = Timer.periodic(
@@ -169,7 +181,6 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void dispose() {
     _customRouteTimer?.cancel();
-    _destinationRecalcTimer?.cancel();
     _reverseGeocodeTimer?.cancel();
     _otherReverseGeocodeTimer?.cancel();
     _otherLocationPollTimer?.cancel();
@@ -181,8 +192,6 @@ class _MapScreenState extends State<MapScreen> {
     _searchFocus.dispose();
     _placeSearchService.dispose();
     _locationService.dispose();
-    _offRouteSince = null;
-    _routeRecalculating = false;
     super.dispose();
   }
 
@@ -190,7 +199,6 @@ class _MapScreenState extends State<MapScreen> {
     if (!mounted) return;
 
     setState(() {
-      _loading = false;
       _currentLocation = _cachedLastPosition;
     });
 
@@ -452,8 +460,6 @@ class _MapScreenState extends State<MapScreen> {
 
       if (location == null) return;
 
-      _lastOtherFetchAt = DateTime.now();
-
       final position = LatLng(location.latitude, location.longitude);
 
       setState(() {
@@ -529,6 +535,10 @@ class _MapScreenState extends State<MapScreen> {
     await _buildDestinationRoute(force: true);
   }
 
+  /// Builds (or rebuilds) the route from the current location to
+  /// the active destination. Called:
+  ///   - automatically after the user picks a destination
+  ///   - manually by the "Reroute" button
   Future<void> _buildDestinationRoute({bool force = false}) async {
     final destination = _activeDestination;
     final origin = _currentLocation;
@@ -543,10 +553,13 @@ class _MapScreenState extends State<MapScreen> {
       if (moved < 25) return;
     }
 
-    final showBanner = _destinationRouteGeometry.isNotEmpty;
+    // When called as a manual reroute (force == true and we
+    // already have a route), light up the button spinner so the
+    // user gets immediate feedback.
+    final isManualReroute = force && _destinationRouteGeometry.isNotEmpty;
 
-    if (showBanner && mounted) {
-      setState(() => _routeRecalculating = true);
+    if (isManualReroute && mounted) {
+      setState(() => _destinationRerouting = true);
     }
 
     try {
@@ -556,7 +569,9 @@ class _MapScreenState extends State<MapScreen> {
       );
 
       if (!mounted || result == null) {
-        if (mounted) setState(() => _routeRecalculating = false);
+        if (mounted && isManualReroute) {
+          setState(() => _destinationRerouting = false);
+        }
         return;
       }
 
@@ -565,7 +580,7 @@ class _MapScreenState extends State<MapScreen> {
         _destinationRemainingMeters = result.distanceMeters;
         _destinationRemainingSeconds = result.durationSeconds;
         _lastRouteOrigin = origin;
-        _routeRecalculating = false;
+        _destinationRerouting = false;
       });
 
       if (result.geometry.length >= 2) {
@@ -578,91 +593,8 @@ class _MapScreenState extends State<MapScreen> {
         );
       }
     } catch (_) {
-      if (mounted) setState(() => _routeRecalculating = false);
+      if (mounted) setState(() => _destinationRerouting = false);
     }
-  }
-
-  void _maybeRecalcDestinationRoute() {
-    if (_activeDestination == null) return;
-
-    final current = _currentLocation;
-    if (current == null) return;
-
-    if (_destinationRouteGeometry.length < 2) {
-      _buildDestinationRoute(force: true);
-      return;
-    }
-
-    final deviation = _distanceFromRoute(
-      current,
-      _destinationRouteGeometry,
-    );
-
-    if (deviation > _offRouteThresholdMeters) {
-      _offRouteSince ??= DateTime.now();
-
-      final offFor = DateTime.now().difference(_offRouteSince!);
-
-      if (offFor >= _offRouteGracePeriod) {
-        _offRouteSince = null;
-        _buildDestinationRoute(force: true);
-      }
-    } else {
-      _offRouteSince = null;
-    }
-  }
-
-  double _distanceFromRoute(LatLng point, List<LatLng> route) {
-    if (route.length < 2) return double.infinity;
-
-    double minDist = double.infinity;
-    const calc = Distance();
-
-    for (int i = 0; i < route.length - 1; i++) {
-      final segDist = _distanceToSegment(
-        point,
-        route[i],
-        route[i + 1],
-        calc,
-      );
-      if (segDist < minDist) minDist = segDist;
-    }
-
-    return minDist;
-  }
-
-  double _distanceToSegment(
-    LatLng p,
-    LatLng a,
-    LatLng b,
-    Distance calc,
-  ) {
-    final ax = a.longitude;
-    final ay = a.latitude;
-    final bx = b.longitude;
-    final by = b.latitude;
-    final px = p.longitude;
-    final py = p.latitude;
-
-    final dx = bx - ax;
-    final dy = by - ay;
-    final len2 = dx * dx + dy * dy;
-
-    if (len2 == 0) {
-      return calc.as(LengthUnit.Meter, p, a);
-    }
-
-    var t = ((px - ax) * dx + (py - ay) * dy) / len2;
-    t = t.clamp(0.0, 1.0);
-
-    final projX = ax + t * dx;
-    final projY = ay + t * dy;
-
-    return calc.as(
-      LengthUnit.Meter,
-      p,
-      LatLng(projY, projX),
-    );
   }
 
   void _trimDestinationRoute(LatLng currentPosition) {
@@ -720,8 +652,7 @@ class _MapScreenState extends State<MapScreen> {
       _searchResults = <Place>[];
       _searchError = null;
       _searchLoading = false;
-      _offRouteSince = null;
-      _routeRecalculating = false;
+      _destinationRerouting = false;
     });
   }
 
@@ -856,7 +787,13 @@ class _MapScreenState extends State<MapScreen> {
 
       _updateOtherTicker();
 
-      await _buildRouteToOtherPerson();
+      // Only build the connecting route once, or when we don't
+      // have one yet. Manual recalculation is done by the caller
+      // (e.g. after the user taps a route button). We do NOT
+      // auto-rebuild on every refresh anymore.
+      if (_routeGeometry.isEmpty) {
+        await _buildRouteToOtherPerson();
+      }
     } catch (_) {}
   }
 
@@ -865,7 +802,7 @@ class _MapScreenState extends State<MapScreen> {
     final destination = _otherLocation;
     if (start == null || destination == null) return;
 
-    setState(() => _routeLoading = true);
+    setState(() => _otherRouteLoading = true);
     try {
       final url = Uri.parse(
         'https://router.project-osrm.org/route/v1/driving/'
@@ -896,7 +833,7 @@ class _MapScreenState extends State<MapScreen> {
       setState(() => _routeGeometry = points);
     } catch (_) {
     } finally {
-      if (mounted) setState(() => _routeLoading = false);
+      if (mounted) setState(() => _otherRouteLoading = false);
     }
   }
 
@@ -1001,8 +938,9 @@ class _MapScreenState extends State<MapScreen> {
       setState(() => _error = _cleanError(e));
       _showMessage(_cleanError(e));
     } finally {
-      if (!mounted) return;
-      setState(() => _customRouteGenerating = false);
+      if (mounted) {
+        setState(() => _customRouteGenerating = false);
+      }
     }
   }
 
@@ -1160,32 +1098,50 @@ class _MapScreenState extends State<MapScreen> {
   // ============================================================
 
   Widget _buildCurrentLocationMarker() {
-    return PhotoMarker(
-      photoUrl: _currentUserPhotoUrl ?? widget.currentUserPhotoUrl,
-      fallbackInitial: '?',
+    return _PinWithTail(
       ringColor: const Color(0xFFD4AF37),
       fillColor: const Color(0xFFFFF8E1),
-      size: 50,
+      circleSize: _pinCircleDiameter,
+      tailHeight: _pinTailHeight,
+      child: PhotoMarker(
+        photoUrl: _currentUserPhotoUrl ?? widget.currentUserPhotoUrl,
+        fallbackInitial: '?',
+        ringColor: const Color(0xFFD4AF37),
+        fillColor: const Color(0xFFFFF8E1),
+        size: _pinCircleDiameter,
+      ),
     );
   }
 
   Widget _buildOtherLocationMarker() {
-    return PhotoMarker(
-      photoUrl: widget.otherUserPhotoUrl,
-      fallbackInitial: widget.name,
+    return _PinWithTail(
       ringColor: const Color(0xFF25D366),
       fillColor: const Color(0xFFE8F5E9),
-      size: 50,
+      circleSize: _pinCircleDiameter,
+      tailHeight: _pinTailHeight,
+      child: PhotoMarker(
+        photoUrl: widget.otherUserPhotoUrl,
+        fallbackInitial: widget.name,
+        ringColor: const Color(0xFF25D366),
+        fillColor: const Color(0xFFE8F5E9),
+        size: _pinCircleDiameter,
+      ),
     );
   }
 
   Widget _buildDestinationMarker() {
-    return PhotoMarker(
-      photoUrl: null,
-      fallbackInitial: '🚩',
+    return _PinWithTail(
       ringColor: const Color(0xFFF57C00),
       fillColor: const Color(0xFFFFF3E0),
-      size: 48,
+      circleSize: _pinCircleDiameter,
+      tailHeight: _pinTailHeight,
+      child: PhotoMarker(
+        photoUrl: null,
+        fallbackInitial: '🚩',
+        ringColor: const Color(0xFFF57C00),
+        fillColor: const Color(0xFFFFF3E0),
+        size: _pinCircleDiameter,
+      ),
     );
   }
 
@@ -1231,42 +1187,6 @@ class _MapScreenState extends State<MapScreen> {
           fontWeight: FontWeight.bold,
           color: Colors.white,
           letterSpacing: 1,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildReroutingBanner() {
-    if (!_routeRecalculating) return const SizedBox.shrink();
-
-    return Material(
-      color: WebsColors.primaryGreen,
-      borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: 16,
-          vertical: 10,
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: const [
-            SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: Colors.white,
-              ),
-            ),
-            SizedBox(width: 10),
-            Text(
-              'Rerouting…',
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
         ),
       ),
     );
@@ -1330,6 +1250,18 @@ class _MapScreenState extends State<MapScreen> {
               const SizedBox(height: 12),
               _buildCustomRouteCard(),
               const SizedBox(height: 12),
+
+              if (_activeDestination != null) ...[
+                DestinationRouteBar(
+                  remainingMeters: _destinationRemainingMeters,
+                  remainingSeconds: _destinationRemainingSeconds,
+                  isRerouting: _destinationRerouting,
+                  onReroute: () => _buildDestinationRoute(force: true),
+                  onClear: _clearDestination,
+                ),
+                const SizedBox(height: 12),
+              ],
+
               PlaceSearchCard(
                 controller: _searchController,
                 focusNode: _searchFocus,
@@ -1814,7 +1746,7 @@ class _MapScreenState extends State<MapScreen> {
             ),
           ],
 
-          if (_routeLoading)
+          if (_otherRouteLoading)
             const Padding(
               padding: EdgeInsets.only(top: 10),
               child: LinearProgressIndicator(
@@ -2065,6 +1997,9 @@ class _MapScreenState extends State<MapScreen> {
     final showOtherTicker =
         _activeRequest != null && _activeRequest!.isAccepted;
 
+    final hasDestinationRoute =
+        _destinationRouteGeometry.length >= 2 && _activeDestination != null;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Map'),
@@ -2141,13 +2076,25 @@ class _MapScreenState extends State<MapScreen> {
                     ],
                   ),
 
+                // Golden direction dots — only on the destination
+                // route, and only when the user is actually going
+                // somewhere. Two dots, sliding in the direction of
+                // travel, looping until the route is cleared.
+                if (hasDestinationRoute)
+                  RouteFlowDotsLayer(
+                    route: _destinationRouteGeometry,
+                    dotCount: _routeDotCount,
+                    pixelsPerSecond: _routeDotPixelsPerSecond,
+                    color: const Color(0xFFFFC107),
+                  ),
+
                 MarkerLayer(
                   markers: [
                     if (_currentLocation != null)
                       Marker(
                         point: _currentLocation!,
-                        width: 50,
-                        height: 65,
+                        width: _pinBoxWidth,
+                        height: _pinBoxHeight,
                         alignment: Alignment.bottomCenter,
                         child: _buildCurrentLocationMarker(),
                       ),
@@ -2156,16 +2103,16 @@ class _MapScreenState extends State<MapScreen> {
                         _activeRequest!.isAccepted)
                       Marker(
                         point: _otherLocation!,
-                        width: 50,
-                        height: 65,
+                        width: _pinBoxWidth,
+                        height: _pinBoxHeight,
                         alignment: Alignment.bottomCenter,
                         child: _buildOtherLocationMarker(),
                       ),
                     if (_activeDestination != null)
                       Marker(
                         point: _activeDestination!.position,
-                        width: 48,
-                        height: 62,
+                        width: _pinBoxWidth,
+                        height: _pinBoxHeight,
                         alignment: Alignment.bottomCenter,
                         child: _buildDestinationMarker(),
                       ),
@@ -2174,6 +2121,7 @@ class _MapScreenState extends State<MapScreen> {
                         point: point.position,
                         width: 22,
                         height: 22,
+                        alignment: Alignment.center,
                         child: _buildRoutePointMarker(point.order),
                       ),
                     ),
@@ -2182,14 +2130,6 @@ class _MapScreenState extends State<MapScreen> {
               ],
             ),
           ),
-
-          if (_routeRecalculating)
-            Positioned(
-              top: showOtherTicker ? tickerHeight + 10 : 10,
-              left: 0,
-              right: 0,
-              child: Center(child: _buildReroutingBanner()),
-            ),
 
           if (_error != null)
             Positioned(
@@ -2257,4 +2197,86 @@ class _MapScreenState extends State<MapScreen> {
       ),
     );
   }
+}
+
+// ================================================================
+// PIN WITH TAIL
+// ================================================================
+
+class _PinWithTail extends StatelessWidget {
+  final Widget child;
+  final Color ringColor;
+  final Color fillColor;
+  final double circleSize;
+  final double tailHeight;
+
+  const _PinWithTail({
+    required this.child,
+    required this.ringColor,
+    required this.fillColor,
+    required this.circleSize,
+    required this.tailHeight,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: circleSize,
+          height: circleSize,
+          child: child,
+        ),
+        SizedBox(
+          width: circleSize,
+          height: tailHeight,
+          child: CustomPaint(
+            painter: _TailPainter(
+              ringColor: ringColor,
+              fillColor: fillColor,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TailPainter extends CustomPainter {
+  final Color ringColor;
+  final Color fillColor;
+
+  _TailPainter({required this.ringColor, required this.fillColor});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Use dart:ui's Path explicitly — flutter_map also exports a
+    // class called `Path`, and the bare name resolves to that one.
+    final ui.Path path = ui.Path();
+
+    final topLeft = Offset(size.width * 0.18, 0);
+    final topRight = Offset(size.width * 0.82, 0);
+    final apex = Offset(size.width / 2, size.height);
+
+    path.moveTo(topLeft.dx, topLeft.dy);
+    path.lineTo(topRight.dx, topRight.dy);
+    path.lineTo(apex.dx, apex.dy);
+    path.close();
+
+    canvas.drawPath(path, Paint()..color = fillColor);
+
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = ringColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..strokeJoin = StrokeJoin.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _TailPainter old) =>
+      old.ringColor != ringColor || old.fillColor != fillColor;
 }
