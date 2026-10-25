@@ -53,7 +53,7 @@ class MapScreen extends StatefulWidget {
 }
 
 class _MapScreenState extends State<MapScreen> {
-  static const String _bgApiBase = 'http://134.209.65.175/api/v1';
+    static const String _bgApiBase = 'https://webzapp.org/api/v1';
 
   static const double _maxAcceptableAccuracyMeters = 100.0;
 
