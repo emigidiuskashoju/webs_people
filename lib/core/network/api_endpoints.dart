@@ -1,6 +1,6 @@
 class ApiEndpoints {
   static const String baseUrl =
-    'http://134.209.65.175/api/v1';
+      'https://webzapp.org/api/v1';
 
   static const String health =
       '/health';
