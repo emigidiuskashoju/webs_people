@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_analytics/firebase_analytics.dart'; // <-- ADDED
 
 import '../../core/theme/webs_colors.dart';
 import '../auth/screens/login_screen.dart';
 import '../chats/chats_screen.dart';
 import '../chats/models/preloaded_chats_data.dart';
 import '../settings/settings_screen.dart';
+import '../updates/widgets/owner_announcement_dialog.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   /// Data the splash already loaded for the chats screen.
@@ -39,6 +41,15 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   void initState() {
     super.initState();
 
+    // --- ANALYTICS: Track main chat list open ---
+    FirebaseAnalytics.instance.logEvent(
+      name: 'screen_view',
+      parameters: {
+        'screen_name': 'chats_list',
+      },
+    );
+    // --------------------------------------------
+
     _screens = [
       ChatsScreen(preloaded: widget.preloadedChats),
       const SettingsScreen(),
@@ -66,34 +77,42 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _screens,
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: _onNavigationItemTapped,
-        backgroundColor: WebsColors.surface(context),
-        indicatorColor: WebsColors.softGreen(context),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.chat_bubble_outline),
-            selectedIcon: Icon(Icons.chat_bubble),
-            label: 'Chats',
+    return Stack(
+      children: [
+        // Your main app content
+        Scaffold(
+          body: IndexedStack(
+            index: _currentIndex,
+            children: _screens,
           ),
-          NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
-            label: 'Settings',
+          bottomNavigationBar: NavigationBar(
+            selectedIndex: _currentIndex,
+            onDestinationSelected: _onNavigationItemTapped,
+            backgroundColor: WebsColors.surface(context),
+            indicatorColor: WebsColors.softGreen(context),
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.chat_bubble_outline),
+                selectedIcon: Icon(Icons.chat_bubble),
+                label: 'Chats',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.settings_outlined),
+                selectedIcon: Icon(Icons.settings),
+                label: 'Settings',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.security_outlined),
+                selectedIcon: Icon(Icons.security),
+                label: 'Security',
+              ),
+            ],
           ),
-          NavigationDestination(
-            icon: Icon(Icons.security_outlined),
-            selectedIcon: Icon(Icons.security),
-            label: 'Security',
-          ),
-        ],
-      ),
+        ),
+
+        // The invisible listener that checks for owner announcements
+        const OwnerAnnouncementDialog(),
+      ],
     );
   }
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:firebase_analytics/firebase_analytics.dart'; // <-- ADDED
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -78,6 +79,16 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+
+    // --- ANALYTICS: Track chat open ---
+    FirebaseAnalytics.instance.logEvent(
+      name: 'screen_view',
+      parameters: {
+        'screen_name': 'main_chat',
+      },
+    );
+    // ----------------------------------
+
     ActiveConversation.instance.enter(_conversationId);
 
     _messageController.addListener(_onComposerChanged);

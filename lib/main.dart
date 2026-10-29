@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:firebase_analytics/firebase_analytics.dart'; // <-- ADDED
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 
@@ -42,6 +43,16 @@ Future<void> main() async {
 
 /// Runs after the app is visible. Nothing here blocks UI.
 Future<void> _initializeBackgroundServices() async {
+  // ------------------------------------------------------------
+  // TRACK APP OPEN IN FIREBASE ANALYTICS
+  // ------------------------------------------------------------
+  try {
+    await FirebaseAnalytics.instance.logAppOpen();
+    debugPrint('ANALYTICS: App open logged');
+  } catch (e) {
+    debugPrint('ANALYTICS: initialisation failed: $e');
+  }
+
   try {
     await NotificationService.instance.initialize();
   } catch (e) {

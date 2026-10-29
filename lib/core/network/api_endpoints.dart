@@ -225,4 +225,6 @@ class ApiEndpoints {
   // ============================================================
 
   static const String fcmToken = '/fcm-token';
+
+    static const String announcementsLatest = '/announcements/latest';
 }
