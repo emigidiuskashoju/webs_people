@@ -1,7 +1,7 @@
-import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../core/theme/webs_colors.dart';
 
@@ -16,17 +16,24 @@ class _OwnerAnnouncementDialogState extends State<OwnerAnnouncementDialog> {
   @override
   void initState() {
     super.initState();
-    _checkForAnnouncements();
+    // Wait until the frame is rendered before showing a dialog
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkForAnnouncements();
+    });
   }
 
   Future<void> _checkForAnnouncements() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final seenId = prefs.getInt('last_seen_announcement_id') ?? 0;
+      
+      // TEMPORARY FOR TESTING: We set this to 0 so it ALWAYS shows.
+      // To turn memory back on later, change this to:
+      // final seenId = prefs.getInt('last_seen_announcement_id') ?? 0;
+      final seenId = 0; 
 
       final response = await http.get(
         Uri.parse('${ApiEndpoints.baseUrl}${ApiEndpoints.announcementsLatest}'),
-      );
+      ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -44,8 +51,9 @@ class _OwnerAnnouncementDialogState extends State<OwnerAnnouncementDialog> {
               body: ann['body'] ?? '',
               imageUrl: ann['image_url'],
               onDismiss: () async {
-                // Save so it doesn't show again
-                await prefs.setInt('last_seen_announcement_id', newId);
+                // TEMPORARY FOR TESTING: Commented out so it doesn't remember.
+                // To turn memory back on later, uncomment this:
+                // await prefs.setInt('last_seen_announcement_id', newId);
               },
             );
           }
@@ -88,7 +96,7 @@ class _OwnerAnnouncementDialogState extends State<OwnerAnnouncementDialog> {
                         fit: BoxFit.cover,
                         // Fallback if image fails to load
                         errorBuilder: (_, __, ___) => Container(
-                          width: 40, height: 40, color: Colors.green,
+                          width: 40, height: 40, color: WebsColors.primaryGreen,
                           child: const Icon(Icons.public, color: Colors.white),
                         ),
                       ),
