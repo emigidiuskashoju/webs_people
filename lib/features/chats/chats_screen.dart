@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/errors/api_exception.dart';
+import '../../core/network/api_endpoints.dart';
 import '../../core/storage/auth_storage.dart';
 import '../../core/storage/saved_account_storage.dart';
 import '../../core/theme/webs_colors.dart';
@@ -65,6 +68,11 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
   Set<int> _pendingLocationUserIds = <int>{};
 
+  // --- ANNOUNCEMENT STATE ---
+  Map<String, dynamic>? _announcement;
+  bool _loadingAnnouncement = true;
+  bool _hasSeenAnnouncement = false;
+
   Timer? _presencePollTimer;
 
   String _searchQuery = '';
@@ -80,6 +88,8 @@ class _ChatsScreenState extends State<ChatsScreen> {
       const Duration(seconds: 15),
       (_) => _loadPresences(),
     );
+
+    _fetchAnnouncement();
 
     final preloaded = widget.preloaded;
 
@@ -110,29 +120,94 @@ class _ChatsScreenState extends State<ChatsScreen> {
     super.dispose();
   }
 
-  void _onSearchChanged() {
-    final query = _searchController.text.trim().toLowerCase();
+  // ============================================================
+  // ANNOUNCEMENT FETCH
+  // ============================================================
 
-    if (query == _searchQuery) return;
+  Future<void> _fetchAnnouncement() async {
+    try {
+      final response = await http.get(
+        Uri.parse('${ApiEndpoints.baseUrl}${ApiEndpoints.announcementsLatest}'),
+      ).timeout(const Duration(seconds: 5));
 
-    setState(() {
-      _searchQuery = query;
-    });
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['status'] == 'success') {
+          if (!mounted) return;
+          setState(() {
+            _announcement = data['data'];
+            _loadingAnnouncement = false;
+          });
+          return;
+        }
+      }
+    } catch (_) {}
+    if (mounted) {
+      setState(() => _loadingAnnouncement = false);
+    }
+  }
+
+  void _openAnnouncement() {
+    if (_announcement == null) return;
+    setState(() => _hasSeenAnnouncement = true); // Mark as read locally
+
+    final title = _announcement!['title'] ?? 'Webs Update';
+    final body = _announcement!['body'] ?? '';
+    final imageUrl = _announcement!['image_url'];
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(
+            title: Row(
+              children: [
+                const Icon(Icons.verified, color: Color(0xFF25D366), size: 20),
+                const SizedBox(width: 8),
+                const Text('Webs'),
+              ],
+            ),
+          ),
+          body: SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (imageUrl != null && imageUrl.isNotEmpty) ...[
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.network(imageUrl, width: double.infinity, fit: BoxFit.cover),
+                  ),
+                  const SizedBox(height: 20),
+                ],
+                Text(title, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 16),
+                Text(body, style: const TextStyle(fontSize: 16, height: 1.5)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   // ============================================================
   // PRESENCE
   // ============================================================
 
-    Future<void> _loadPresences() async {
+  void _onSearchChanged() {
+    final query = _searchController.text.trim().toLowerCase();
+    if (query == _searchQuery) return;
+    setState(() {
+      _searchQuery = query;
+    });
+  }
+
+  Future<void> _loadPresences() async {
     final currentUserId = _currentUserId;
     if (currentUserId == null) return;
 
-    // Only ask about the users actually visible in the chats
-    // list. This keeps the presence request small no matter
-    // how many users exist in the system.
     final ids = <int>{};
-
     for (final contact in _registeredContacts) {
       final user = _matchedUsersByPhone[contact.phoneNumber];
       if (user != null && user.id != currentUserId) {
@@ -155,7 +230,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
   }
 
   // ============================================================
-  // SEARCH FILTERING
+  // SEARCH & LOADING
   // ============================================================
 
   List<PhoneContact> _applySearch(List<PhoneContact> input) {
@@ -165,13 +240,10 @@ class _ChatsScreenState extends State<ChatsScreen> {
       final name = contact.name.toLowerCase();
       final phone = contact.phoneNumber.toLowerCase();
 
-      final digitsQuery =
-          _searchQuery.replaceAll(RegExp(r'\D'), '');
-      final digitsPhone =
-          phone.replaceAll(RegExp(r'\D'), '');
+      final digitsQuery = _searchQuery.replaceAll(RegExp(r'\D'), '');
+      final digitsPhone = phone.replaceAll(RegExp(r'\D'), '');
 
       final matchesName = name.contains(_searchQuery);
-
       final matchesPhone = digitsQuery.isNotEmpty
           ? digitsPhone.contains(digitsQuery)
           : phone.contains(_searchQuery);
@@ -180,51 +252,31 @@ class _ChatsScreenState extends State<ChatsScreen> {
     }).toList();
   }
 
-  // ============================================================
-  // LOAD / REFRESH
-  // ============================================================
-
   Future<void> _loadSummariesAndPending() async {
     final currentUserId = _currentUserId;
     if (currentUserId == null) return;
 
     try {
-      await _chatRepository.receivePendingMessages(
-        currentUserId: currentUserId,
-      );
+      await _chatRepository.receivePendingMessages(currentUserId: currentUserId);
     } catch (_) {}
 
     await _refreshPendingLocationRequests(silent: true);
 
     try {
-      final summaries =
-          await _chatRepository.getConversationSummaries(
-        currentUserId: currentUserId,
-      );
-
+      final summaries = await _chatRepository.getConversationSummaries(currentUserId: currentUserId);
       if (!mounted) return;
-
       setState(() {
         _summaries = summaries;
-        _registeredContacts =
-            _sortRegistered(_registeredContacts);
+        _registeredContacts = _sortRegistered(_registeredContacts);
       });
     } catch (_) {}
   }
 
-  Future<void> _refreshPendingLocationRequests({
-    bool silent = false,
-  }) async {
+  Future<void> _refreshPendingLocationRequests({bool silent = false}) async {
     try {
-      final requests =
-          await _locationRequestService.getPendingRequests();
-
-      final ids = requests
-          .map((request) => request.requesterId)
-          .toSet();
-
+      final requests = await _locationRequestService.getPendingRequests();
+      final ids = requests.map((request) => request.requesterId).toSet();
       if (!mounted) return;
-
       setState(() {
         _pendingLocationUserIds = ids;
       });
@@ -247,18 +299,11 @@ class _ChatsScreenState extends State<ChatsScreen> {
       DateTime? lastB;
 
       if (userA != null) {
-        final convId = _chatRepository.createConversationId(
-          currentUserId,
-          userA.id,
-        );
+        final convId = _chatRepository.createConversationId(currentUserId, userA.id);
         lastA = _summaries[convId]?.lastMessageAt;
       }
-
       if (userB != null) {
-        final convId = _chatRepository.createConversationId(
-          currentUserId,
-          userB.id,
-        );
+        final convId = _chatRepository.createConversationId(currentUserId, userB.id);
         lastB = _summaries[convId]?.lastMessageAt;
       }
 
@@ -270,9 +315,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
         if (byTime != 0) return byTime;
       }
 
-      return a.name
-          .toLowerCase()
-          .compareTo(b.name.toLowerCase());
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
     });
 
     return copy;
@@ -308,15 +351,12 @@ class _ChatsScreenState extends State<ChatsScreen> {
       final cached = await _preloader.loadFromCacheOnly();
       if (mounted && cached.allContacts.isNotEmpty) {
         setState(() {
-          _currentUserId = cached.currentUserId == 0
-              ? currentUserId
-              : cached.currentUserId;
+          _currentUserId = cached.currentUserId == 0 ? currentUserId : cached.currentUserId;
           _allContacts = cached.allContacts;
           _registeredContacts = cached.registeredContacts;
           _inviteContacts = cached.inviteContacts;
           _matchedUsersByPhone = cached.matchedUsersByPhone;
-          _pendingLocationUserIds =
-              cached.pendingLocationRequestUserIds;
+          _pendingLocationUserIds = cached.pendingLocationRequestUserIds;
           _isLoading = false;
         });
       }
@@ -324,9 +364,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
       final stale = await _preloader.isCacheStale();
 
       if (stale || cached.allContacts.isEmpty) {
-        await _runBackgroundRefresh(
-          silent: cached.allContacts.isEmpty ? false : true,
-        );
+        await _runBackgroundRefresh(silent: cached.allContacts.isEmpty ? false : true);
       } else if (mounted) {
         setState(() => _isLoading = false);
       }
@@ -349,19 +387,15 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
     try {
       final fresh = await _preloader.refresh();
-
       if (!mounted) return;
 
       setState(() {
-        if (fresh.currentUserId != 0) {
-          _currentUserId = fresh.currentUserId;
-        }
+        if (fresh.currentUserId != 0) _currentUserId = fresh.currentUserId;
         _allContacts = fresh.allContacts;
         _registeredContacts = fresh.registeredContacts;
         _inviteContacts = fresh.inviteContacts;
         _matchedUsersByPhone = fresh.matchedUsersByPhone;
-        _pendingLocationUserIds =
-            fresh.pendingLocationRequestUserIds;
+        _pendingLocationUserIds = fresh.pendingLocationRequestUserIds;
         _errorMessage = fresh.errorMessage;
         _isLoading = false;
       });
@@ -385,6 +419,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
     if (_backgroundRefreshRunning) return;
     await _runBackgroundRefresh(silent: false);
     await _loadPresences();
+    await _fetchAnnouncement();
   }
 
   // ============================================================
@@ -454,66 +489,38 @@ class _ChatsScreenState extends State<ChatsScreen> {
               children: [
                 Text(
                   'Switch account',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: WebsColors.textDark(context),
-                  ),
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: WebsColors.textDark(context)),
                 ),
                 const SizedBox(height: 6),
                 Text(
                   'Choose a saved Webs account.',
-                  style: TextStyle(
-                    color: WebsColors.textLight(context),
-                  ),
+                  style: TextStyle(color: WebsColors.textLight(context)),
                 ),
                 const SizedBox(height: 16),
                 ...accounts.map((account) {
                   final isCurrent = account.token == currentToken;
-
-                  final displayName =
-                      account.name.trim().isNotEmpty
-                          ? account.name.trim()
-                          : 'Webs user';
+                  final displayName = account.name.trim().isNotEmpty ? account.name.trim() : 'Webs user';
 
                   return ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: CircleAvatar(
                       backgroundColor: WebsColors.softGreen(context),
                       child: Text(
-                        displayName.isNotEmpty
-                            ? displayName[0].toUpperCase()
-                            : '?',
-                        style: const TextStyle(
-                          color: WebsColors.primaryGreen,
-                          fontWeight: FontWeight.bold,
-                        ),
+                        displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
+                        style: const TextStyle(color: WebsColors.primaryGreen, fontWeight: FontWeight.bold),
                       ),
                     ),
                     title: Text(
                       displayName,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        color: WebsColors.textDark(context),
-                      ),
+                      style: TextStyle(fontWeight: FontWeight.w600, color: WebsColors.textDark(context)),
                     ),
                     subtitle: Text(
-                      account.email.trim().isNotEmpty
-                          ? account.email
-                          : account.phoneNumber,
-                      style: TextStyle(
-                        color: WebsColors.textLight(context),
-                      ),
+                      account.email.trim().isNotEmpty ? account.email : account.phoneNumber,
+                      style: TextStyle(color: WebsColors.textLight(context)),
                     ),
                     trailing: isCurrent
-                        ? const Icon(
-                            Icons.check_circle,
-                            color: WebsColors.primaryGreen,
-                          )
-                        : Icon(
-                            Icons.chevron_right,
-                            color: WebsColors.textLight(context),
-                          ),
+                        ? const Icon(Icons.check_circle, color: WebsColors.primaryGreen)
+                        : Icon(Icons.chevron_right, color: WebsColors.textLight(context)),
                     onTap: isCurrent
                         ? null
                         : () async {
@@ -533,13 +540,9 @@ class _ChatsScreenState extends State<ChatsScreen> {
   Future<void> _switchAccount(SavedAccount account) async {
     try {
       await _authService.switchAccount(account.token);
-
       if (!mounted) return;
-
       Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(
-          builder: (_) => const MainNavigationScreen(),
-        ),
+        MaterialPageRoute(builder: (_) => const MainNavigationScreen()),
         (route) => false,
       );
     } catch (e) {
@@ -554,11 +557,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
   Widget _buildBody() {
     if (_isLoading) {
-      return const Center(
-        child: CircularProgressIndicator(
-          color: WebsColors.primaryGreen,
-        ),
-      );
+      return const Center(child: CircularProgressIndicator(color: WebsColors.primaryGreen));
     }
 
     if (_errorMessage != null) {
@@ -569,47 +568,40 @@ class _ChatsScreenState extends State<ChatsScreen> {
       return _buildEmptyContactsState();
     }
 
-    final filteredRegistered =
-        _applySearch(_registeredContacts);
-    final filteredInvites =
-        _applySearch(_inviteContacts);
+    final filteredRegistered = _applySearch(_registeredContacts);
+    final filteredInvites = _applySearch(_inviteContacts);
 
+    // Add the announcement tile to the list of items
     final items = <_ChatListItem>[
       const _ChatListItem.header(),
+      if (_announcement != null && _searchQuery.isEmpty) ...[
+        _ChatListItem.announcement(_announcement!),
+        const _ChatListItem.spacer(16),
+      ],
       const _ChatListItem.sectionTitle(title: 'Webs'),
       if (filteredRegistered.isEmpty)
         _ChatListItem.sectionEmpty(
-          icon: _searchQuery.isEmpty
-              ? Icons.people_outline
-              : Icons.search_off,
+          icon: _searchQuery.isEmpty ? Icons.people_outline : Icons.search_off,
           text: _searchQuery.isEmpty
               ? 'None of your phone contacts are using Webs yet.'
               : 'No registered contacts match "$_searchQuery".',
         )
       else
-        ...filteredRegistered.map(
-          (contact) => _ChatListItem.registered(contact),
-        ),
+        ...filteredRegistered.map((contact) => _ChatListItem.registered(contact)),
       const _ChatListItem.spacer(28),
       const _ChatListItem.divider(),
       const _ChatListItem.spacer(24),
       const _ChatListItem.sectionTitle(title: 'Invite to Webs'),
-      const _ChatListItem.sectionSubtitle(
-        text: 'Contacts who are not registered with Webs.',
-      ),
+      const _ChatListItem.sectionSubtitle(text: 'Contacts who are not registered with Webs.'),
       if (filteredInvites.isEmpty)
         _ChatListItem.sectionEmpty(
-          icon: _searchQuery.isEmpty
-              ? Icons.check_circle_outline
-              : Icons.search_off,
+          icon: _searchQuery.isEmpty ? Icons.check_circle_outline : Icons.search_off,
           text: _searchQuery.isEmpty
               ? 'All contacts with phone numbers are already using Webs.'
               : 'No unregistered contacts match "$_searchQuery".',
         )
       else
-        ...filteredInvites.map(
-          (contact) => _ChatListItem.invite(contact),
-        ),
+        ...filteredInvites.map((contact) => _ChatListItem.invite(contact)),
     ];
 
     return Column(
@@ -619,46 +611,28 @@ class _ChatsScreenState extends State<ChatsScreen> {
           child: TextField(
             controller: _searchController,
             textInputAction: TextInputAction.search,
-            style: TextStyle(
-              color: WebsColors.textDark(context),
-            ),
+            style: TextStyle(color: WebsColors.textDark(context)),
             decoration: InputDecoration(
               hintText: 'Search by name or phone number',
-              hintStyle: TextStyle(
-                color: WebsColors.textLight(context),
-              ),
-              prefixIcon: const Icon(
-                Icons.search,
-                color: WebsColors.primaryGreen,
-              ),
+              hintStyle: TextStyle(color: WebsColors.textLight(context)),
+              prefixIcon: const Icon(Icons.search, color: WebsColors.primaryGreen),
               suffixIcon: _searchQuery.isEmpty
                   ? null
                   : IconButton(
                       tooltip: 'Clear',
-                      icon: Icon(
-                        Icons.close,
-                        color: WebsColors.textLight(context),
-                      ),
-                      onPressed: () {
-                        _searchController.clear();
-                      },
+                      icon: Icon(Icons.close, color: WebsColors.textLight(context)),
+                      onPressed: () => _searchController.clear(),
                     ),
               filled: true,
               fillColor: WebsColors.softGreen(context),
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 18,
-                vertical: 14,
-              ),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(24),
                 borderSide: BorderSide.none,
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(24),
-                borderSide: const BorderSide(
-                  color: WebsColors.primaryGreen,
-                  width: 2,
-                ),
+                borderSide: const BorderSide(color: WebsColors.primaryGreen, width: 2),
               ),
             ),
           ),
@@ -676,62 +650,39 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
                 switch (item.kind) {
                   case _ChatListItemKind.header:
-                    return RepaintBoundary(
-                      child: _buildHeader(),
-                    );
-
+                    return RepaintBoundary(child: _buildHeader());
+                  case _ChatListItemKind.announcement:
+                    return RepaintBoundary(child: _buildAnnouncementTile());
                   case _ChatListItemKind.sectionTitle:
-                    return RepaintBoundary(
-                      child: _buildSectionTitle(item.title ?? ''),
-                    );
-
+                    return RepaintBoundary(child: _buildSectionTitle(item.title ?? ''));
                   case _ChatListItemKind.sectionSubtitle:
-                    return RepaintBoundary(
-                      child: _buildSectionSubtitle(item.text ?? ''),
-                    );
-
+                    return RepaintBoundary(child: _buildSectionSubtitle(item.text ?? ''));
                   case _ChatListItemKind.sectionEmpty:
                     return RepaintBoundary(
-                      child: _buildSectionEmpty(
-                        icon: item.icon ?? Icons.info_outline,
-                        text: item.text ?? '',
-                      ),
+                      child: _buildSectionEmpty(icon: item.icon ?? Icons.info_outline, text: item.text ?? ''),
                     );
-
                   case _ChatListItemKind.registered:
                     final contact = item.contact!;
-                    final user =
-                        _matchedUsersByPhone[contact.phoneNumber];
-
-                    if (user == null) {
-                      return const SizedBox.shrink();
-                    }
-
+                    final user = _matchedUsersByPhone[contact.phoneNumber];
+                    if (user == null) return const SizedBox.shrink();
                     return RepaintBoundary(
                       child: Padding(
                         padding: const EdgeInsets.only(bottom: 12),
                         child: _buildRegisteredUserTile(contact, user),
                       ),
                     );
-
                   case _ChatListItemKind.invite:
                     final contact = item.contact!;
-
                     return RepaintBoundary(
                       child: Padding(
                         padding: const EdgeInsets.only(bottom: 12),
                         child: _buildInviteUserTile(contact),
                       ),
                     );
-
                   case _ChatListItemKind.divider:
                     return RepaintBoundary(
-                      child: Divider(
-                        color: WebsColors.border(context),
-                        thickness: 2,
-                      ),
+                      child: Divider(color: WebsColors.border(context), thickness: 2),
                     );
-
                   case _ChatListItemKind.spacer:
                     return SizedBox(height: item.height ?? 0);
                 }
@@ -743,72 +694,126 @@ class _ChatsScreenState extends State<ChatsScreen> {
     );
   }
 
+  // ============================================================
+  // ANNOUNCEMENT TILE (WhatsApp Style)
+  // ============================================================
+
+  Widget _buildAnnouncementTile() {
+    if (_announcement == null) return const SizedBox.shrink();
+
+    final title = _announcement!['title'] ?? 'Webs Update';
+    final body = _announcement!['body'] ?? '';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: WebsColors.surface(context),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: WebsColors.border(context), width: 1.5),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: _openAnnouncement,
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                // WhatsApp Green Logo with chat icon
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF25D366), // WhatsApp Green
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.campaign, color: Colors.white, size: 28),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            'Webs Updates',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: WebsColors.textDark(context),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          const Icon(Icons.verified, color: Color(0xFF25D366), size: 16),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        body,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 13, color: WebsColors.textLight(context)),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                // Show a green unread dot if not seen, otherwise show time
+                _hasSeenAnnouncement
+                    ? Text('Just now', style: TextStyle(fontSize: 12, color: WebsColors.textLight(context)))
+                    : Container(
+                        constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF25D366),
+                          shape: BoxShape.circle,
+                        ),
+                        alignment: Alignment.center,
+                        child: const Text(
+                          '1',
+                          style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ============================================================
+  // HELPER WIDGETS
+  // ============================================================
+
   Widget _buildHeader() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Chats',
-          style: TextStyle(
-            fontSize: 28,
-            fontWeight: FontWeight.bold,
-            color: WebsColors.textDark(context),
-          ),
-        ),
+        Text('Chats', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: WebsColors.textDark(context))),
         const SizedBox(height: 6),
-        Text(
-          'People from your phone contacts who use Webs.',
-          style: TextStyle(
-            fontSize: 14,
-            color: WebsColors.textLight(context),
-          ),
-        ),
+        Text('People from your phone contacts who use Webs.', style: TextStyle(fontSize: 14, color: WebsColors.textLight(context))),
       ],
     );
   }
 
   Widget _buildSectionTitle(String title) {
-    return Text(
-      title,
-      style: TextStyle(
-        fontSize: 19,
-        fontWeight: FontWeight.bold,
-        color: WebsColors.textDark(context),
-      ),
-    );
+    return Text(title, style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold, color: WebsColors.textDark(context)));
   }
 
   Widget _buildSectionSubtitle(String text) {
-    return Text(
-      text,
-      style: TextStyle(
-        fontSize: 14,
-        color: WebsColors.textLight(context),
-      ),
-    );
+    return Text(text, style: TextStyle(fontSize: 14, color: WebsColors.textLight(context)));
   }
 
-  Widget _buildRegisteredAvatar(
-    PhoneContact contact,
-    ContactMatchUser user,
-  ) {
-    final displayName = user.name.trim().isNotEmpty
-        ? user.name.trim()
-        : contact.name.trim();
-
-    return CachedAvatar(
-      photoUrl: user.profilePhotoUrl,
-      fallbackInitial: displayName.isNotEmpty ? displayName : '?',
-      radius: 28,
-    );
+  Widget _buildRegisteredAvatar(PhoneContact contact, ContactMatchUser user) {
+    final displayName = user.name.trim().isNotEmpty ? user.name.trim() : contact.name.trim();
+    return CachedAvatar(photoUrl: user.profilePhotoUrl, fallbackInitial: displayName.isNotEmpty ? displayName : '?', radius: 28);
   }
 
-  Widget _buildAvatarWithPresence(
-    PhoneContact contact,
-    ContactMatchUser user,
-  ) {
+  Widget _buildAvatarWithPresence(PhoneContact contact, ContactMatchUser user) {
     final isOnline = _presences[user.id]?.online == true;
-
     return Stack(
       children: [
         _buildRegisteredAvatar(contact, user),
@@ -822,10 +827,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
               decoration: BoxDecoration(
                 color: const Color(0xFF25D366),
                 shape: BoxShape.circle,
-                border: Border.all(
-                  color: WebsColors.surface(context),
-                  width: 2,
-                ),
+                border: Border.all(color: WebsColors.surface(context), width: 2),
               ),
             ),
           ),
@@ -833,38 +835,24 @@ class _ChatsScreenState extends State<ChatsScreen> {
     );
   }
 
-  Widget _buildRegisteredUserTile(
-    PhoneContact contact,
-    ContactMatchUser user,
-  ) {
+  Widget _buildRegisteredUserTile(PhoneContact contact, ContactMatchUser user) {
     final currentUserId = _currentUserId;
-
-    final displayName = user.name.trim().isNotEmpty
-        ? user.name.trim()
-        : contact.name.trim();
+    final displayName = user.name.trim().isNotEmpty ? user.name.trim() : contact.name.trim();
 
     ConversationSummary? summary;
     if (currentUserId != null) {
-      final conversationId = _chatRepository.createConversationId(
-        currentUserId,
-        user.id,
-      );
+      final conversationId = _chatRepository.createConversationId(currentUserId, user.id);
       summary = _summaries[conversationId];
     }
 
     final unreadCount = summary?.unreadCount ?? 0;
-
-    final hasLocationRequest =
-        _pendingLocationUserIds.contains(user.id);
+    final hasLocationRequest = _pendingLocationUserIds.contains(user.id);
 
     return Container(
       decoration: BoxDecoration(
         color: WebsColors.surface(context),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: WebsColors.border(context),
-          width: 1.5,
-        ),
+        border: Border.all(color: WebsColors.border(context), width: 1.5),
       ),
       child: Material(
         color: Colors.transparent,
@@ -881,26 +869,14 @@ class _ChatsScreenState extends State<ChatsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        displayName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: WebsColors.textDark(context),
-                        ),
-                      ),
+                      Text(displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: WebsColors.textDark(context))),
                       const SizedBox(height: 4),
                       _buildPreviewLine(summary, user.id),
                     ],
                   ),
                 ),
                 const SizedBox(width: 10),
-                _buildTrailing(
-                  unreadCount: unreadCount,
-                  hasLocationRequest: hasLocationRequest,
-                ),
+                _buildTrailing(unreadCount: unreadCount, hasLocationRequest: hasLocationRequest),
               ],
             ),
           ),
@@ -909,16 +885,10 @@ class _ChatsScreenState extends State<ChatsScreen> {
     );
   }
 
-  Widget _buildPreviewLine(
-    ConversationSummary? summary,
-    int otherUserId,
-  ) {
+  Widget _buildPreviewLine(ConversationSummary? summary, int otherUserId) {
     final light = WebsColors.textLight(context);
-
     final presence = _presences[otherUserId];
-    final presenceLabel = presence?.statusLabel(
-      isTypingHere: false,
-    );
+    final presenceLabel = presence?.statusLabel(isTypingHere: false);
 
     if (summary == null || summary.lastMessageText.trim().isEmpty) {
       if (presenceLabel != null && presenceLabel.isNotEmpty) {
@@ -928,19 +898,12 @@ class _ChatsScreenState extends State<ChatsScreen> {
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
             fontSize: 13,
-            fontStyle: presence?.typing == true
-                ? FontStyle.italic
-                : FontStyle.normal,
-            color: presence?.online == true
-                ? WebsColors.primaryGreen
-                : light,
+            fontStyle: presence?.typing == true ? FontStyle.italic : FontStyle.normal,
+            color: presence?.online == true ? WebsColors.primaryGreen : light,
           ),
         );
       }
-      return Text(
-        '',
-        style: TextStyle(fontSize: 13, color: light),
-      );
+      return Text('', style: TextStyle(fontSize: 13, color: light));
     }
 
     final prefix = summary.lastMessageIsMine ? 'You: ' : '';
@@ -957,70 +920,34 @@ class _ChatsScreenState extends State<ChatsScreen> {
           ),
         ),
         const SizedBox(width: 8),
-        Text(
-          timeLabel,
-          style: TextStyle(fontSize: 12, color: light),
-        ),
+        Text(timeLabel, style: TextStyle(fontSize: 12, color: light)),
       ],
     );
   }
 
-  Widget _buildTrailing({
-    required int unreadCount,
-    required bool hasLocationRequest,
-  }) {
+  Widget _buildTrailing({required int unreadCount, required bool hasLocationRequest}) {
     if (unreadCount > 0 || hasLocationRequest) {
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           if (hasLocationRequest)
             Container(
-              constraints: const BoxConstraints(
-                minWidth: 26,
-                minHeight: 26,
-              ),
-              padding: const EdgeInsets.symmetric(
-                horizontal: 7,
-                vertical: 3,
-              ),
-              decoration: const BoxDecoration(
-                color: Color(0xFF25D366),
-                shape: BoxShape.circle,
-              ),
+              constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              decoration: const BoxDecoration(color: Color(0xFF25D366), shape: BoxShape.circle),
               alignment: Alignment.center,
-              child: const Text(
-                'R',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+              child: const Text('R', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
             ),
-          if (hasLocationRequest && unreadCount > 0)
-            const SizedBox(width: 6),
+          if (hasLocationRequest && unreadCount > 0) const SizedBox(width: 6),
           if (unreadCount > 0)
             Container(
-              constraints: const BoxConstraints(
-                minWidth: 26,
-                minHeight: 26,
-              ),
-              padding: const EdgeInsets.symmetric(
-                horizontal: 7,
-                vertical: 3,
-              ),
-              decoration: const BoxDecoration(
-                color: Color(0xFF25D366),
-                shape: BoxShape.circle,
-              ),
+              constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              decoration: const BoxDecoration(color: Color(0xFF25D366), shape: BoxShape.circle),
               alignment: Alignment.center,
               child: Text(
                 unreadCount > 99 ? '99+' : '$unreadCount',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
               ),
             ),
         ],
@@ -1029,15 +956,8 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
     return Container(
       padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: WebsColors.softGreen(context),
-        shape: BoxShape.circle,
-      ),
-      child: const Icon(
-        Icons.chevron_right,
-        color: WebsColors.primaryGreen,
-        size: 20,
-      ),
+      decoration: BoxDecoration(color: WebsColors.softGreen(context), shape: BoxShape.circle),
+      child: const Icon(Icons.chevron_right, color: WebsColors.primaryGreen, size: 20),
     );
   }
 
@@ -1061,10 +981,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
       decoration: BoxDecoration(
         color: WebsColors.surface(context),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: WebsColors.border(context),
-          width: 1.5,
-        ),
+        border: Border.all(color: WebsColors.border(context), width: 1.5),
       ),
       child: Material(
         color: Colors.transparent,
@@ -1081,36 +998,16 @@ class _ChatsScreenState extends State<ChatsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        contact.name,
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: WebsColors.textDark(context),
-                        ),
-                      ),
+                      Text(contact.name, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: WebsColors.textDark(context))),
                       const SizedBox(height: 4),
-                      Text(
-                        contact.phoneNumber,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: WebsColors.textLight(context),
-                        ),
-                      ),
+                      Text(contact.phoneNumber, style: TextStyle(fontSize: 13, color: WebsColors.textLight(context))),
                     ],
                   ),
                 ),
                 Container(
                   padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: WebsColors.softGreen(context),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.person_add_alt_1,
-                    color: WebsColors.primaryGreen,
-                    size: 20,
-                  ),
+                  decoration: BoxDecoration(color: WebsColors.softGreen(context), shape: BoxShape.circle),
+                  child: const Icon(Icons.person_add_alt_1, color: WebsColors.primaryGreen, size: 20),
                 ),
               ],
             ),
@@ -1120,19 +1017,14 @@ class _ChatsScreenState extends State<ChatsScreen> {
     );
   }
 
-  Widget _buildAvatar(
-    String name, {
-    bool isInvite = false,
-  }) {
+  Widget _buildAvatar(String name, {bool isInvite = false}) {
     final letter = name.isNotEmpty ? name[0].toUpperCase() : '?';
 
     return Container(
       width: 52,
       height: 52,
       decoration: BoxDecoration(
-        color: isInvite
-            ? WebsColors.textLight(context).withValues(alpha: 0.15)
-            : WebsColors.softGreen(context),
+        color: isInvite ? WebsColors.textLight(context).withValues(alpha: 0.15) : WebsColors.softGreen(context),
         shape: BoxShape.circle,
       ),
       alignment: Alignment.center,
@@ -1141,24 +1033,17 @@ class _ChatsScreenState extends State<ChatsScreen> {
         style: TextStyle(
           fontSize: 20,
           fontWeight: FontWeight.bold,
-          color: isInvite
-              ? WebsColors.textLight(context)
-              : WebsColors.primaryGreen,
+          color: isInvite ? WebsColors.textLight(context) : WebsColors.primaryGreen,
         ),
       ),
     );
   }
 
-  Future<void> _openChat(
-    ContactMatchUser user,
-    PhoneContact contact,
-  ) async {
+  Future<void> _openChat(ContactMatchUser user, PhoneContact contact) async {
     final currentUserId = _currentUserId;
 
     if (currentUserId == null) {
-      _showMessage(
-        'Your user information is not available. Please refresh and try again.',
-      );
+      _showMessage('Your user information is not available. Please refresh and try again.');
       return;
     }
 
@@ -1172,9 +1057,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
         builder: (_) => ChatScreen(
           currentUserId: currentUserId,
           userId: user.id,
-          name: user.name.trim().isNotEmpty
-              ? user.name.trim()
-              : contact.name,
+          name: user.name.trim().isNotEmpty ? user.name.trim() : contact.name,
           phoneNumber: user.phoneNumber,
           profilePhotoUrl: user.profilePhotoUrl,
         ),
@@ -1186,22 +1069,11 @@ class _ChatsScreenState extends State<ChatsScreen> {
   }
 
   Future<void> _inviteContact(PhoneContact contact) async {
-    final message = 'Hi ${contact.name}, '
-        'I am using Webs. '
-        'Join me on Webs so we can connect privately.';
-
-    final smsUri = Uri(
-      scheme: 'sms',
-      path: contact.phoneNumber,
-      queryParameters: {'body': message},
-    );
+    final message = 'Hi ${contact.name}, I am using Webs. Join me on Webs so we can connect privately.';
+    final smsUri = Uri(scheme: 'sms', path: contact.phoneNumber, queryParameters: {'body': message});
 
     try {
-      final launched = await launchUrl(
-        smsUri,
-        mode: LaunchMode.externalApplication,
-      );
-
+      final launched = await launchUrl(smsUri, mode: LaunchMode.externalApplication);
       if (!launched && mounted) {
         _showMessage('Could not open the SMS application.');
       }
@@ -1212,44 +1084,27 @@ class _ChatsScreenState extends State<ChatsScreen> {
     }
   }
 
-  Widget _buildSectionEmpty({
-    required IconData icon,
-    required String text,
-  }) {
+  Widget _buildSectionEmpty({required IconData icon, required String text}) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         color: WebsColors.surface(context),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: WebsColors.border(context),
-          width: 1.5,
-        ),
+        border: Border.all(color: WebsColors.border(context), width: 1.5),
       ),
       child: Column(
         children: [
           Container(
             padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: WebsColors.softGreen(context),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              icon,
-              size: 42,
-              color: WebsColors.primaryGreen,
-            ),
+            decoration: BoxDecoration(color: WebsColors.softGreen(context), shape: BoxShape.circle),
+            child: Icon(icon, size: 42, color: WebsColors.primaryGreen),
           ),
           const SizedBox(height: 12),
           Text(
             text,
             textAlign: TextAlign.center,
-            style: TextStyle(
-              color: WebsColors.textLight(context),
-              fontSize: 14,
-              height: 1.4,
-            ),
+            style: TextStyle(color: WebsColors.textLight(context), fontSize: 14, height: 1.4),
           ),
         ],
       ),
@@ -1265,25 +1120,14 @@ class _ChatsScreenState extends State<ChatsScreen> {
           children: [
             Container(
               padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: WebsColors.softGreen(context),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.contacts_outlined,
-                size: 56,
-                color: WebsColors.primaryGreen,
-              ),
+              decoration: BoxDecoration(color: WebsColors.softGreen(context), shape: BoxShape.circle),
+              child: const Icon(Icons.contacts_outlined, size: 56, color: WebsColors.primaryGreen),
             ),
             const SizedBox(height: 20),
             Text(
               'We could not load your contacts.',
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: WebsColors.textDark(context),
-              ),
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: WebsColors.textDark(context)),
             ),
             const SizedBox(height: 8),
             Text(
@@ -1298,13 +1142,8 @@ class _ChatsScreenState extends State<ChatsScreen> {
               label: const Text('Try again'),
               style: FilledButton.styleFrom(
                 backgroundColor: WebsColors.primaryGreen,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 32,
-                  vertical: 14,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               ),
             ),
           ],
@@ -1322,24 +1161,13 @@ class _ChatsScreenState extends State<ChatsScreen> {
           children: [
             Container(
               padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: WebsColors.softGreen(context),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.contacts_outlined,
-                size: 56,
-                color: WebsColors.primaryGreen,
-              ),
+              decoration: BoxDecoration(color: WebsColors.softGreen(context), shape: BoxShape.circle),
+              child: const Icon(Icons.contacts_outlined, size: 56, color: WebsColors.primaryGreen),
             ),
             const SizedBox(height: 20),
             Text(
               'No contacts found.',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: WebsColors.textDark(context),
-              ),
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: WebsColors.textDark(context)),
             ),
             const SizedBox(height: 8),
             Text(
@@ -1354,13 +1182,8 @@ class _ChatsScreenState extends State<ChatsScreen> {
               label: const Text('Refresh contacts'),
               style: FilledButton.styleFrom(
                 backgroundColor: WebsColors.primaryGreen,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 32,
-                  vertical: 14,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               ),
             ),
           ],
@@ -1375,9 +1198,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
         content: Text(message),
         backgroundColor: Colors.redAccent,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }
@@ -1389,6 +1210,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
 enum _ChatListItemKind {
   header,
+  announcement,
   sectionTitle,
   sectionSubtitle,
   sectionEmpty,
@@ -1401,6 +1223,7 @@ enum _ChatListItemKind {
 class _ChatListItem {
   final _ChatListItemKind kind;
   final PhoneContact? contact;
+  final Map<String, dynamic>? announcement;
   final String? title;
   final String? text;
   final IconData? icon;
@@ -1408,6 +1231,15 @@ class _ChatListItem {
 
   const _ChatListItem.header()
       : kind = _ChatListItemKind.header,
+        contact = null,
+        announcement = null,
+        title = null,
+        text = null,
+        icon = null,
+        height = null;
+
+  const _ChatListItem.announcement(this.announcement)
+      : kind = _ChatListItemKind.announcement,
         contact = null,
         title = null,
         text = null,
@@ -1417,6 +1249,7 @@ class _ChatListItem {
   const _ChatListItem.sectionTitle({required String title})
       : kind = _ChatListItemKind.sectionTitle,
         contact = null,
+        announcement = null,
         title = title,
         text = null,
         icon = null,
@@ -1425,16 +1258,16 @@ class _ChatListItem {
   const _ChatListItem.sectionSubtitle({required String text})
       : kind = _ChatListItemKind.sectionSubtitle,
         contact = null,
+        announcement = null,
         title = null,
         text = text,
         icon = null,
         height = null;
 
-  const _ChatListItem.sectionEmpty({
-    required IconData icon,
-    required String text,
-  })  : kind = _ChatListItemKind.sectionEmpty,
+  const _ChatListItem.sectionEmpty({required IconData icon, required String text})
+      : kind = _ChatListItemKind.sectionEmpty,
         contact = null,
+        announcement = null,
         title = null,
         text = text,
         icon = icon,
@@ -1442,6 +1275,7 @@ class _ChatListItem {
 
   const _ChatListItem.registered(this.contact)
       : kind = _ChatListItemKind.registered,
+        announcement = null,
         title = null,
         text = null,
         icon = null,
@@ -1449,6 +1283,7 @@ class _ChatListItem {
 
   const _ChatListItem.invite(this.contact)
       : kind = _ChatListItemKind.invite,
+        announcement = null,
         title = null,
         text = null,
         icon = null,
@@ -1457,6 +1292,7 @@ class _ChatListItem {
   const _ChatListItem.divider()
       : kind = _ChatListItemKind.divider,
         contact = null,
+        announcement = null,
         title = null,
         text = null,
         icon = null,
@@ -1465,6 +1301,7 @@ class _ChatListItem {
   const _ChatListItem.spacer(this.height)
       : kind = _ChatListItemKind.spacer,
         contact = null,
+        announcement = null,
         title = null,
         text = null,
         icon = null;
