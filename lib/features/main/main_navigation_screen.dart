@@ -5,7 +5,6 @@ import '../auth/screens/login_screen.dart';
 import '../chats/chats_screen.dart';
 import '../chats/models/preloaded_chats_data.dart';
 import '../settings/settings_screen.dart';
-import '../places/screens/create_place_screen.dart'; // <-- ADD THIS
 
 class MainNavigationScreen extends StatefulWidget {
   final PreloadedChatsData? preloadedChats;
@@ -22,14 +21,13 @@ class MainNavigationScreen extends StatefulWidget {
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
   late final List<Widget> _screens;
-  static const int _securityTabIndex = 3; // <-- CHANGED TO 3
+  static const int _securityTabIndex = 2;
 
   @override
   void initState() {
     super.initState();
     _screens = [
       ChatsScreen(preloaded: widget.preloadedChats),
-      const CreatePlaceScreen(), // <-- ADDED HERE
       const SettingsScreen(),
     ];
   }
@@ -67,11 +65,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             icon: Icon(Icons.chat_bubble_outline),
             selectedIcon: Icon(Icons.chat_bubble),
             label: 'Chats',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.add_location_alt_outlined), // <-- NEW ICON
-            selectedIcon: Icon(Icons.add_location_alt),
-            label: 'Share', // <-- NEW TAB
           ),
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),
