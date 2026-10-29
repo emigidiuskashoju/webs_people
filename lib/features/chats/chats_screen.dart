@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/errors/api_exception.dart';
@@ -45,8 +46,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
   final SavedAccountStorage _savedAccountStorage = SavedAccountStorage();
   final AuthStorage _authStorage = AuthStorage();
   final ChatRepository _chatRepository = ChatRepository();
-  final LocationRequestService _locationRequestService =
-      LocationRequestService();
+  final LocationRequestService _locationRequestService = LocationRequestService();
   final PresenceService _presenceService = PresenceService();
 
   final ContactPreloader _preloader = ContactPreloader();
@@ -68,10 +68,8 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
   Set<int> _pendingLocationUserIds = <int>{};
 
-  // --- ANNOUNCEMENT STATE ---
   Map<String, dynamic>? _announcement;
-  bool _loadingAnnouncement = true;
-  bool _hasSeenAnnouncement = false;
+  bool _hasSeenAnnouncement = true; // Default to true (no unread badge)
 
   Timer? _presencePollTimer;
 
@@ -99,8 +97,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
       _registeredContacts = preloaded.registeredContacts;
       _inviteContacts = preloaded.inviteContacts;
       _matchedUsersByPhone = preloaded.matchedUsersByPhone;
-      _pendingLocationUserIds =
-          preloaded.pendingLocationRequestUserIds;
+      _pendingLocationUserIds = preloaded.pendingLocationRequestUserIds;
       _errorMessage = preloaded.errorMessage;
       _isLoading = false;
 
@@ -121,11 +118,15 @@ class _ChatsScreenState extends State<ChatsScreen> {
   }
 
   // ============================================================
-  // ANNOUNCEMENT FETCH
+  // ANNOUNCEMENT FETCH (With Memory)
   // ============================================================
 
   Future<void> _fetchAnnouncement() async {
     try {
+      final prefs = await SharedPreferences.getInstance();
+      // Get the last seen ID. Default to 0 if never seen one.
+      final lastSeenId = prefs.getInt('last_seen_announcement_id') ?? 0;
+
       final response = await http.get(
         Uri.parse('${ApiEndpoints.baseUrl}${ApiEndpoints.announcementsLatest}'),
       ).timeout(const Duration(seconds: 5));
@@ -134,27 +135,35 @@ class _ChatsScreenState extends State<ChatsScreen> {
         final data = jsonDecode(response.body);
         if (data['status'] == 'success') {
           if (!mounted) return;
+          final ann = data['data'];
+          final serverId = ann['id'] ?? 0;
+
           setState(() {
-            _announcement = data['data'];
-            _loadingAnnouncement = false;
+            _announcement = ann;
+            // If server ID is higher than our saved ID, it's new/unread!
+            _hasSeenAnnouncement = serverId <= lastSeenId;
           });
           return;
         }
       }
     } catch (_) {}
-    if (mounted) {
-      setState(() => _loadingAnnouncement = false);
-    }
   }
 
-  void _openAnnouncement() {
+  Future<void> _openAnnouncement() async {
     if (_announcement == null) return;
-    setState(() => _hasSeenAnnouncement = true); // Mark as read locally
+    
+    setState(() => _hasSeenAnnouncement = true);
+
+    // Save the ID so we remember they saw it
+    final prefs = await SharedPreferences.getInstance();
+    final serverId = _announcement!['id'] ?? 0;
+    await prefs.setInt('last_seen_announcement_id', serverId);
 
     final title = _announcement!['title'] ?? 'Webs Update';
     final body = _announcement!['body'] ?? '';
     final imageUrl = _announcement!['image_url'];
 
+    if (!mounted) return;
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -192,7 +201,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
   }
 
   // ============================================================
-  // PRESENCE
+  // PRESENCE & SEARCH & LOADING
   // ============================================================
 
   void _onSearchChanged() {
@@ -228,10 +237,6 @@ class _ChatsScreenState extends State<ChatsScreen> {
       setState(() => _presences = presences);
     } catch (_) {}
   }
-
-  // ============================================================
-  // SEARCH & LOADING
-  // ============================================================
 
   List<PhoneContact> _applySearch(List<PhoneContact> input) {
     if (_searchQuery.isEmpty) return input;
@@ -571,7 +576,6 @@ class _ChatsScreenState extends State<ChatsScreen> {
     final filteredRegistered = _applySearch(_registeredContacts);
     final filteredInvites = _applySearch(_inviteContacts);
 
-    // Add the announcement tile to the list of items
     final items = <_ChatListItem>[
       const _ChatListItem.header(),
       if (_announcement != null && _searchQuery.isEmpty) ...[
@@ -720,7 +724,6 @@ class _ChatsScreenState extends State<ChatsScreen> {
             padding: const EdgeInsets.all(14),
             child: Row(
               children: [
-                // WhatsApp Green Logo with chat icon
                 Container(
                   width: 52,
                   height: 52,
@@ -760,7 +763,6 @@ class _ChatsScreenState extends State<ChatsScreen> {
                   ),
                 ),
                 const SizedBox(width: 10),
-                // Show a green unread dot if not seen, otherwise show time
                 _hasSeenAnnouncement
                     ? Text('Just now', style: TextStyle(fontSize: 12, color: WebsColors.textLight(context)))
                     : Container(
