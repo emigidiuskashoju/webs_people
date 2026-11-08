@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -28,6 +27,7 @@ import 'services/place_routing_service.dart';
 import 'widgets/destination_route_bar.dart';
 import 'widgets/location_ticker.dart';
 import 'widgets/map_style_sheet.dart';
+import 'widgets/pair_marker.dart';
 import 'widgets/photo_marker.dart';
 import 'widgets/place_search_card.dart';
 import 'widgets/route_flow_dots.dart';
@@ -60,11 +60,44 @@ class _MapScreenState extends State<MapScreen> {
   // ------------------------------------------------------------
   // Marker geometry (unchanged from the marker-drift fix)
   // ------------------------------------------------------------
+  // PhotoMarker draws its own tail (25% of the circle), so the
+  // marker box must be exactly circle + tail. Its bottom edge is the
+  // tail tip, and that tip must sit exactly on the GPS point.
+  //
+  // In flutter_map 8, Marker.alignment says where the WHOLE widget
+  // goes relative to the point: Alignment.topCenter = "widget sits
+  // above the point", so the bottom (the tip) touches the point.
+  // Alignment.bottomCenter would put the widget BELOW the point —
+  // the tip lands ~55 px south of the real location, and because
+  // 55 px covers a different ground distance at each zoom level, the
+  // pin seems to slide around while zooming and misses the route.
+  static const Alignment _pinAlignment = Alignment.topCenter;
   static const double _pinCircleDiameter = 44.0;
-  static const double _pinTailHeight = 16.0;
-  static const double _pinBoxWidth = 44.0;
+  static const double _pinTailHeight = _pinCircleDiameter * 0.25;
+  static const double _pinBoxWidth = _pinCircleDiameter;
   static const double _pinBoxHeight =
       _pinCircleDiameter + _pinTailHeight;
+
+  // Pin colors
+  static const Color _meRing = Color(0xFFD4AF37);
+  static const Color _meFill = Color(0xFFFFF8E1);
+  static const Color _otherRing = Color(0xFF25D366);
+  static const Color _otherFill = Color(0xFFE8F5E9);
+  static const Color _destRing = Color(0xFFF57C00);
+  static const Color _destFill = Color(0xFFFFF3E0);
+
+  // Accuracy circles bigger than this are hidden (they would cover
+  // the whole map and say nothing useful).
+  static const double _maxAccuracyCircleMeters = 150.0;
+
+  // "Together" detection. Two phones side by side report positions a
+  // few metres apart (each GPS fix has its own error), which looks
+  // like two different places once you zoom in. If the people are
+  // closer than this — the larger of the minimum and both accuracy
+  // radii added up, capped at the maximum — show one shared pin.
+  static const double _togetherMinMeters = 15.0;
+  static const double _togetherMaxMeters = 40.0;
+  static const double _pairAvatarSize = 40.0;
 
   // ------------------------------------------------------------
   // Direction-dot tuning
@@ -123,6 +156,7 @@ class _MapScreenState extends State<MapScreen> {
   String? _error;
 
   String? _currentUserPhotoUrl;
+  String? _currentUserName;
 
   String? _dailyCode;
   DateTime? _dailyCodeExpiresAt;
@@ -237,6 +271,7 @@ class _MapScreenState extends State<MapScreen> {
       setState(() {
         _currentUserPhotoUrl =
             user['profile_photo_url']?.toString();
+        _currentUserName = user['name']?.toString();
       });
     } catch (_) {}
   }
@@ -1098,50 +1133,98 @@ class _MapScreenState extends State<MapScreen> {
   // ============================================================
 
   Widget _buildCurrentLocationMarker() {
-    return _PinWithTail(
-      ringColor: const Color(0xFFD4AF37),
-      fillColor: const Color(0xFFFFF8E1),
-      circleSize: _pinCircleDiameter,
-      tailHeight: _pinTailHeight,
-      child: PhotoMarker(
-        photoUrl: _currentUserPhotoUrl ?? widget.currentUserPhotoUrl,
-        fallbackInitial: '?',
-        ringColor: const Color(0xFFD4AF37),
-        fillColor: const Color(0xFFFFF8E1),
-        size: _pinCircleDiameter,
-      ),
+    final name = _currentUserName?.trim() ?? '';
+    return PhotoMarker(
+      photoUrl: _currentUserPhotoUrl ?? widget.currentUserPhotoUrl,
+      fallbackInitial: name.isNotEmpty ? name : 'Me',
+      ringColor: _meRing,
+      fillColor: _meFill,
+      size: _pinCircleDiameter,
     );
   }
 
   Widget _buildOtherLocationMarker() {
-    return _PinWithTail(
-      ringColor: const Color(0xFF25D366),
-      fillColor: const Color(0xFFE8F5E9),
-      circleSize: _pinCircleDiameter,
-      tailHeight: _pinTailHeight,
-      child: PhotoMarker(
-        photoUrl: widget.otherUserPhotoUrl,
-        fallbackInitial: widget.name,
-        ringColor: const Color(0xFF25D366),
-        fillColor: const Color(0xFFE8F5E9),
-        size: _pinCircleDiameter,
-      ),
+    final staleness = _otherStaleness;
+    final isStale = staleness != null && staleness.inMinutes >= 5;
+    final isVeryOld = staleness != null && staleness.inHours >= 1;
+
+    // Fresh = bright green. 5+ min old = faded. 1h+ old = grey ring,
+    // so nobody mistakes an old position for a live one.
+    final marker = PhotoMarker(
+      photoUrl: widget.otherUserPhotoUrl,
+      fallbackInitial: widget.name,
+      ringColor: isVeryOld ? Colors.grey.shade600 : _otherRing,
+      fillColor: isVeryOld ? Colors.grey.shade200 : _otherFill,
+      size: _pinCircleDiameter,
     );
+
+    return isStale ? Opacity(opacity: 0.6, child: marker) : marker;
   }
 
   Widget _buildDestinationMarker() {
-    return _PinWithTail(
-      ringColor: const Color(0xFFF57C00),
-      fillColor: const Color(0xFFFFF3E0),
-      circleSize: _pinCircleDiameter,
-      tailHeight: _pinTailHeight,
-      child: PhotoMarker(
-        photoUrl: null,
-        fallbackInitial: '🚩',
-        ringColor: const Color(0xFFF57C00),
-        fillColor: const Color(0xFFFFF3E0),
-        size: _pinCircleDiameter,
-      ),
+    return const PhotoMarker(
+      photoUrl: null,
+      fallbackInitial: '🚩',
+      ringColor: _destRing,
+      fillColor: _destFill,
+      size: _pinCircleDiameter,
+    );
+  }
+
+  /// Point where both users are drawn as one shared pin, or null when
+  /// they should be drawn separately.
+  ///
+  /// Only for a fresh location: if the other person's position is
+  /// 5+ minutes old, they may have walked away, so keep two pins.
+  LatLng? _togetherPoint() {
+    final me = _currentLocation;
+    final other = _otherLocation;
+    final request = _activeRequest;
+    if (me == null || other == null) return null;
+    if (request == null || !request.isAccepted) return null;
+
+    final staleness = _otherStaleness;
+    if (staleness == null || staleness.inMinutes >= 5) return null;
+
+    final myAccuracy = _tickerData.accuracyMeters ?? 0;
+    final otherAccuracy = _otherAccuracy ?? 0;
+    final threshold = (myAccuracy + otherAccuracy)
+        .clamp(_togetherMinMeters, _togetherMaxMeters);
+
+    final gap = const Distance().as(LengthUnit.Meter, me, other);
+    if (gap > threshold) return null;
+
+    // Midpoint is the best guess for where both phones really are.
+    return LatLng(
+      (me.latitude + other.latitude) / 2,
+      (me.longitude + other.longitude) / 2,
+    );
+  }
+
+  Widget _buildTogetherMarker() {
+    final myName = _currentUserName?.trim() ?? '';
+    return PairMarker(
+      firstPhotoUrl: _currentUserPhotoUrl ?? widget.currentUserPhotoUrl,
+      firstInitial: myName.isNotEmpty ? myName : 'Me',
+      firstColor: _meRing,
+      secondPhotoUrl: widget.otherUserPhotoUrl,
+      secondInitial: widget.name,
+      secondColor: _otherRing,
+      avatarSize: _pairAvatarSize,
+    );
+  }
+
+  /// Translucent circle showing how precise a GPS fix is.
+  CircleMarker? _accuracyCircle(LatLng? point, double? meters, Color color) {
+    if (point == null || meters == null) return null;
+    if (meters <= 0 || meters > _maxAccuracyCircleMeters) return null;
+    return CircleMarker(
+      point: point,
+      radius: meters,
+      useRadiusInMeter: true,
+      color: color.withValues(alpha: 0.15),
+      borderColor: color.withValues(alpha: 0.45),
+      borderStrokeWidth: 1.5,
     );
   }
 
@@ -2000,6 +2083,9 @@ class _MapScreenState extends State<MapScreen> {
     final hasDestinationRoute =
         _destinationRouteGeometry.length >= 2 && _activeDestination != null;
 
+    final togetherPoint = _togetherPoint();
+    final pairSize = PairMarker.sizeFor(_pairAvatarSize);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Map'),
@@ -2088,24 +2174,50 @@ class _MapScreenState extends State<MapScreen> {
                     color: const Color(0xFFFFC107),
                   ),
 
+                // Accuracy circles sit under the pins.
+                CircleLayer(
+                  circles: [
+                    ?_accuracyCircle(
+                      _currentLocation,
+                      _tickerData.accuracyMeters,
+                      _meRing,
+                    ),
+                    if (showOtherTicker && togetherPoint == null)
+                      ?_accuracyCircle(
+                        _otherLocation,
+                        _otherAccuracy,
+                        _otherRing,
+                      ),
+                  ],
+                ),
+
                 MarkerLayer(
                   markers: [
-                    if (_currentLocation != null)
+                    if (togetherPoint != null)
+                      Marker(
+                        point: togetherPoint,
+                        width: pairSize.width,
+                        height: pairSize.height,
+                        alignment: _pinAlignment,
+                        child: _buildTogetherMarker(),
+                      ),
+                    if (_currentLocation != null && togetherPoint == null)
                       Marker(
                         point: _currentLocation!,
                         width: _pinBoxWidth,
                         height: _pinBoxHeight,
-                        alignment: Alignment.bottomCenter,
+                        alignment: _pinAlignment,
                         child: _buildCurrentLocationMarker(),
                       ),
                     if (_otherLocation != null &&
                         _activeRequest != null &&
-                        _activeRequest!.isAccepted)
+                        _activeRequest!.isAccepted &&
+                        togetherPoint == null)
                       Marker(
                         point: _otherLocation!,
                         width: _pinBoxWidth,
                         height: _pinBoxHeight,
-                        alignment: Alignment.bottomCenter,
+                        alignment: _pinAlignment,
                         child: _buildOtherLocationMarker(),
                       ),
                     if (_activeDestination != null)
@@ -2113,7 +2225,7 @@ class _MapScreenState extends State<MapScreen> {
                         point: _activeDestination!.position,
                         width: _pinBoxWidth,
                         height: _pinBoxHeight,
-                        alignment: Alignment.bottomCenter,
+                        alignment: _pinAlignment,
                         child: _buildDestinationMarker(),
                       ),
                     ..._routePoints.map(
@@ -2197,86 +2309,4 @@ class _MapScreenState extends State<MapScreen> {
       ),
     );
   }
-}
-
-// ================================================================
-// PIN WITH TAIL
-// ================================================================
-
-class _PinWithTail extends StatelessWidget {
-  final Widget child;
-  final Color ringColor;
-  final Color fillColor;
-  final double circleSize;
-  final double tailHeight;
-
-  const _PinWithTail({
-    required this.child,
-    required this.ringColor,
-    required this.fillColor,
-    required this.circleSize,
-    required this.tailHeight,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        SizedBox(
-          width: circleSize,
-          height: circleSize,
-          child: child,
-        ),
-        SizedBox(
-          width: circleSize,
-          height: tailHeight,
-          child: CustomPaint(
-            painter: _TailPainter(
-              ringColor: ringColor,
-              fillColor: fillColor,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _TailPainter extends CustomPainter {
-  final Color ringColor;
-  final Color fillColor;
-
-  _TailPainter({required this.ringColor, required this.fillColor});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    // Use dart:ui's Path explicitly — flutter_map also exports a
-    // class called `Path`, and the bare name resolves to that one.
-    final ui.Path path = ui.Path();
-
-    final topLeft = Offset(size.width * 0.18, 0);
-    final topRight = Offset(size.width * 0.82, 0);
-    final apex = Offset(size.width / 2, size.height);
-
-    path.moveTo(topLeft.dx, topLeft.dy);
-    path.lineTo(topRight.dx, topRight.dy);
-    path.lineTo(apex.dx, apex.dy);
-    path.close();
-
-    canvas.drawPath(path, Paint()..color = fillColor);
-
-    canvas.drawPath(
-      path,
-      Paint()
-        ..color = ringColor
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2
-        ..strokeJoin = StrokeJoin.round,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _TailPainter old) =>
-      old.ringColor != ringColor || old.fillColor != fillColor;
 }

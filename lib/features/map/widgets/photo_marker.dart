@@ -111,8 +111,10 @@ class PhotoMarker extends StatelessWidget {
       color: fillColor,
       alignment: Alignment.center,
       child: Text(
-        fallbackInitial.isNotEmpty
-            ? fallbackInitial[0].toUpperCase()
+        // .characters keeps emoji (🚩, 📍) and accented letters whole;
+        // fallbackInitial[0] would cut an emoji in half and show a box.
+        fallbackInitial.trim().isNotEmpty
+            ? fallbackInitial.trim().characters.first.toUpperCase()
             : '?',
         style: TextStyle(
           fontSize: size * 0.45,

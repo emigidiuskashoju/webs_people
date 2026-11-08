@@ -1071,11 +1071,27 @@ class _ChatsScreenState extends State<ChatsScreen> {
   }
 
   Future<void> _inviteContact(PhoneContact contact) async {
-    final message = 'Hi ${contact.name}, I am using Webs. Join me on Webs so we can connect privately.';
-    final smsUri = Uri(scheme: 'sms', path: contact.phoneNumber, queryParameters: {'body': message});
+    final message = 'Hi ${contact.name}! I am using Webz, a free app for '
+        'private messaging and live location sharing with friends and family. '
+        'With Webz you can:\n'
+        '- Track lost devices\n'
+        '- Chat privately with your contacts\n'
+        '- Share your live location on the map\n'
+        '- See which of your contacts are already on Webz\n'
+        'Join me on Webz! Download it here: https://webzapp.org/downloads/';
+
+    // Encode manually so spaces become %20, not '+'
+    final phone = contact.phoneNumber.replaceAll(RegExp(r'[^\d+]'), '');
+    final smsUri = Uri.parse(
+      'sms:$phone?body=${Uri.encodeComponent(message)}',
+    );
 
     try {
-      final launched = await launchUrl(smsUri, mode: LaunchMode.externalApplication);
+      final launched = await launchUrl(
+        smsUri,
+        mode: LaunchMode.externalApplication,
+      );
+
       if (!launched && mounted) {
         _showMessage('Could not open the SMS application.');
       }
