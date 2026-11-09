@@ -3,6 +3,13 @@ import 'package:flutter_contacts/flutter_contacts.dart';
 
 import '../models/phone_contact.dart';
 
+/// Contact-loading logs. Only printed in debug builds: debugPrint
+/// still runs in the released app, and one line per contact slows
+/// down loading on phones with large phone books.
+void _log(String message) {
+  if (kDebugMode) debugPrint(message);
+}
+
 class PhoneContactsService {
   /// Default country calling code used when a phone number is stored
   /// in local format (e.g. 0629187797 -> +255629187797).
@@ -14,8 +21,8 @@ class PhoneContactsService {
       PermissionType.read,
     );
 
-    debugPrint('=== CONTACTS DEBUG ===');
-    debugPrint('Permission status: $permissionStatus');
+    _log('=== CONTACTS DEBUG ===');
+    _log('Permission status: $permissionStatus');
 
     if (permissionStatus != PermissionStatus.granted) {
       throw Exception(
@@ -30,7 +37,7 @@ class PhoneContactsService {
       },
     );
 
-    debugPrint('Total contacts read from device: ${contacts.length}');
+    _log('Total contacts read from device: ${contacts.length}');
 
     final results = <PhoneContact>[];
     var skippedNoPhone = 0;
@@ -49,7 +56,7 @@ class PhoneContactsService {
 
         if (normalized == null) {
           skippedBadNumber++;
-          debugPrint('  Skipped invalid: "$name" -> "${phone.number}"');
+          _log('  Skipped invalid: "$name" -> "${phone.number}"');
           continue;
         }
 
@@ -62,17 +69,17 @@ class PhoneContactsService {
       }
     }
 
-    debugPrint('Skipped (no phone): $skippedNoPhone');
-    debugPrint('Skipped (invalid number): $skippedBadNumber');
-    debugPrint('Valid contacts before dedup: ${results.length}');
+    _log('Skipped (no phone): $skippedNoPhone');
+    _log('Skipped (invalid number): $skippedBadNumber');
+    _log('Valid contacts before dedup: ${results.length}');
 
     final deduped = _removeDuplicates(results);
-    debugPrint('After dedup: ${deduped.length}');
+    _log('After dedup: ${deduped.length}');
 
     if (deduped.isNotEmpty) {
-      debugPrint('Sample (first 10):');
+      _log('Sample (first 10):');
       for (final c in deduped.take(10)) {
-        debugPrint('  ${c.name} -> ${c.phoneNumber}');
+        _log('  ${c.name} -> ${c.phoneNumber}');
       }
     }
 

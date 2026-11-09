@@ -10,7 +10,7 @@ import 'contact_match_service.dart';
 ///   - Check staleness
 ///   - Clear on logout
 class ContactsCacheService {
-  static const Duration _defaultMaxAge = Duration(hours: 12);
+  static const Duration _defaultMaxAge = Duration(minutes: 30);
 
   final ContactCacheDb _db;
 

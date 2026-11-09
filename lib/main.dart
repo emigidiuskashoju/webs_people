@@ -15,6 +15,7 @@ import 'features/auth/screens/register_screen.dart';
 import 'features/chats/chat_screen.dart';
 import 'features/chats/models/preloaded_chats_data.dart';
 import 'features/chats/services/contact_preloader.dart';
+import 'features/chats/services/unknown_sender_service.dart';
 import 'features/main/main_navigation_screen.dart';
 import 'features/presence/presence_heartbeat.dart';
 import 'features/settings/services/appearance_service.dart';
@@ -207,6 +208,19 @@ class _WebsAppState extends State<WebsApp> {
         phoneNumber = entry.value.phoneNumber;
         profilePhotoUrl = entry.value.profilePhotoUrl;
         break;
+      }
+    }
+
+    // Sender is not in the phone contacts: ask who they are.
+    if (name == 'Chat') {
+      final found = (await UnknownSenderService.instance
+          .resolve({otherUserId}))[otherUserId];
+      if (found != null) {
+        name = found.name.trim().isNotEmpty
+            ? found.name.trim()
+            : (found.phoneNumber.isNotEmpty ? found.phoneNumber : name);
+        phoneNumber = found.phoneNumber;
+        profilePhotoUrl = found.profilePhotoUrl;
       }
     }
 

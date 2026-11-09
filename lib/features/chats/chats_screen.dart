@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_contacts/flutter_contacts.dart' show FlutterContacts;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -26,6 +27,7 @@ import 'models/preloaded_chats_data.dart';
 import 'services/contact_match_service.dart';
 import 'services/contact_preloader.dart';
 import 'services/phone_contacts_service.dart';
+import 'services/unknown_sender_service.dart';
 
 class ChatsScreen extends StatefulWidget {
   final PreloadedChatsData? preloaded;
@@ -39,7 +41,7 @@ class ChatsScreen extends StatefulWidget {
   State<ChatsScreen> createState() => _ChatsScreenState();
 }
 
-class _ChatsScreenState extends State<ChatsScreen> {
+class _ChatsScreenState extends State<ChatsScreen> with WidgetsBindingObserver {
   final PhoneContactsService _contactsService = PhoneContactsService();
   final ContactMatchService _matchService = ContactMatchService();
   final AuthService _authService = AuthService();
@@ -63,6 +65,13 @@ class _ChatsScreenState extends State<ChatsScreen> {
   List<PhoneContact> _inviteContacts = [];
   Map<String, ContactMatchUser> _matchedUsersByPhone = {};
 
+  // People who chatted with you but are not in your phone contacts.
+  // Kept apart from the contact lists above because those are
+  // replaced every time contacts refresh. Keyed by a fake "phone"
+  // ('webs-user:<id>') so the existing tile code can be reused.
+  List<PhoneContact> _otherChatContacts = [];
+  Map<String, ContactMatchUser> _otherChatUsers = {};
+
   Map<String, ConversationSummary> _summaries = {};
   Map<int, UserPresence> _presences = {};
 
@@ -75,11 +84,37 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
   String _searchQuery = '';
 
+  // ------------------------------------------------------------
+  // Automatic contact refresh (WhatsApp-style)
+  // ------------------------------------------------------------
+  // The list reloads by itself when:
+  //   - a contact is added/edited in the phone book (while the
+  //     app is running),
+  //   - you come back to the app, or open this screen,
+  //   - someone in the list changes their name or photo
+  //     (detected through the presence poll).
+  // A reload reads the phone book and asks the server who is on
+  // Webs, so new users and new photos appear without pulling down.
+
+  /// Don't auto-reload more often than this when reopening the
+  /// app / screen.
+  static const Duration _autoRefreshMinGap = Duration(minutes: 2);
+
+  StreamSubscription<void>? _phoneBookSubscription;
+  Timer? _autoRefreshDebounce;
+  DateTime? _lastAutoRefreshAt;
+
+  /// Last seen profile fingerprint per user (from presence).
+  final Map<int, String> _profileRevs = {};
+
   @override
   void initState() {
     super.initState();
 
     _searchController.addListener(_onSearchChanged);
+
+    WidgetsBinding.instance.addObserver(this);
+    _listenToPhoneBook();
 
     _loadPresences();
     _presencePollTimer = Timer.periodic(
@@ -103,6 +138,11 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
       _loadSummariesAndPending();
 
+      // The list above came from the saved copy. If that copy is
+      // older than 2 minutes, re-read the phone book a few seconds
+      // AFTER the screen is showing, so opening the app stays fast.
+      _refreshInBackgroundIfStale();
+
       return;
     }
 
@@ -111,6 +151,9 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _phoneBookSubscription?.cancel();
+    _autoRefreshDebounce?.cancel();
     _presencePollTimer?.cancel();
     _searchController.removeListener(_onSearchChanged);
     _searchController.dispose();
@@ -217,8 +260,8 @@ class _ChatsScreenState extends State<ChatsScreen> {
     if (currentUserId == null) return;
 
     final ids = <int>{};
-    for (final contact in _registeredContacts) {
-      final user = _matchedUsersByPhone[contact.phoneNumber];
+    for (final contact in _chatContacts) {
+      final user = _userFor(contact);
       if (user != null && user.id != currentUserId) {
         ids.add(user.id);
       }
@@ -235,6 +278,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
       final presences = await _presenceService.getForUsers(ids);
       if (!mounted) return;
       setState(() => _presences = presences);
+      _checkProfileChanges(presences);
     } catch (_) {}
   }
 
@@ -243,7 +287,12 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
     return input.where((contact) {
       final name = contact.name.toLowerCase();
-      final phone = contact.phoneNumber.toLowerCase();
+      // Rows for people not in your contacts use a placeholder key
+      // instead of a number; search their real number instead.
+      final phone = (_isOtherChat(contact)
+              ? (_userFor(contact)?.phoneNumber ?? '')
+              : contact.phoneNumber)
+          .toLowerCase();
 
       final digitsQuery = _searchQuery.replaceAll(RegExp(r'\D'), '');
       final digitsPhone = phone.replaceAll(RegExp(r'\D'), '');
@@ -274,7 +323,99 @@ class _ChatsScreenState extends State<ChatsScreen> {
         _summaries = summaries;
         _registeredContacts = _sortRegistered(_registeredContacts);
       });
+      await _loadOtherChats(currentUserId);
     } catch (_) {}
+  }
+
+  // ============================================================
+  // CHATS WITH PEOPLE NOT IN YOUR CONTACTS
+  // ============================================================
+
+  static const String _otherChatKeyPrefix = 'webs-user:';
+
+  /// User behind a list row: a phone contact, or someone who
+  /// messaged you without being in your contacts.
+  ContactMatchUser? _userFor(PhoneContact contact) =>
+      _matchedUsersByPhone[contact.phoneNumber] ??
+      _otherChatUsers[contact.phoneNumber];
+
+  bool _isOtherChat(PhoneContact contact) =>
+      contact.phoneNumber.startsWith(_otherChatKeyPrefix);
+
+  /// Everyone shown in the "Webs" section: contacts on Webs plus
+  /// people who chatted with you, newest conversation first.
+  List<PhoneContact> get _chatContacts {
+    if (_otherChatContacts.isEmpty) return _registeredContacts;
+
+    // If you just saved one of these people as a contact, the
+    // contact row wins until the next reload drops the extra row.
+    final knownIds = _matchedUsersByPhone.values.map((u) => u.id).toSet();
+    final others = _otherChatContacts
+        .where((c) => !knownIds.contains(_otherChatUsers[c.phoneNumber]?.id))
+        .toList();
+
+    return _sortRegistered([..._registeredContacts, ...others]);
+  }
+
+  /// Finds conversations whose other person is not one of your
+  /// phone contacts, and adds them to the list so their messages
+  /// can be opened.
+  Future<void> _loadOtherChats(int currentUserId) async {
+    final knownIds = _matchedUsersByPhone.values.map((u) => u.id).toSet();
+
+    final otherIds = <int>{};
+    for (final conversationId in _summaries.keys) {
+      final parts = conversationId.split('_');
+      if (parts.length != 2) continue;
+      final a = int.tryParse(parts[0]);
+      final b = int.tryParse(parts[1]);
+      if (a == null || b == null) continue;
+      final other = a == currentUserId ? b : a;
+      if (other == currentUserId || knownIds.contains(other)) continue;
+      otherIds.add(other);
+    }
+
+    if (otherIds.isEmpty) {
+      if (_otherChatContacts.isNotEmpty && mounted) {
+        setState(() {
+          _otherChatContacts = [];
+          _otherChatUsers = {};
+        });
+      }
+      return;
+    }
+
+    final resolved = await UnknownSenderService.instance.resolve(otherIds);
+    if (!mounted) return;
+
+    final users = <String, ContactMatchUser>{};
+    final contacts = <PhoneContact>[];
+
+    for (final id in otherIds) {
+      final key = '$_otherChatKeyPrefix$id';
+      final found = resolved[id];
+      final name = found?.name.trim() ?? '';
+      final phone = found?.phoneNumber.trim() ?? '';
+      // Even if the lookup failed (offline), still show the chat so
+      // the messages can be read.
+      final displayName = name.isNotEmpty
+          ? name
+          : (phone.isNotEmpty ? phone : 'Webs user');
+
+      users[key] = ContactMatchUser(
+        id: id,
+        name: displayName,
+        phoneNumber: phone,
+        profilePhotoUrl: found?.profilePhotoUrl,
+      );
+      contacts.add(PhoneContact(name: displayName, phoneNumber: key));
+    }
+
+    setState(() {
+      _otherChatUsers = users;
+      _otherChatContacts = contacts;
+    });
+    unawaited(_loadPresences());
   }
 
   Future<void> _refreshPendingLocationRequests({bool silent = false}) async {
@@ -297,8 +438,8 @@ class _ChatsScreenState extends State<ChatsScreen> {
     final copy = List<PhoneContact>.from(input);
 
     copy.sort((a, b) {
-      final userA = _matchedUsersByPhone[a.phoneNumber];
-      final userB = _matchedUsersByPhone[b.phoneNumber];
+      final userA = _userFor(a);
+      final userB = _userFor(b);
 
       DateTime? lastA;
       DateTime? lastB;
@@ -366,12 +507,17 @@ class _ChatsScreenState extends State<ChatsScreen> {
         });
       }
 
-      final stale = await _preloader.isCacheStale();
-
-      if (stale || cached.allContacts.isEmpty) {
-        await _runBackgroundRefresh(silent: cached.allContacts.isEmpty ? false : true);
-      } else if (mounted) {
-        setState(() => _isLoading = false);
+      if (cached.allContacts.isEmpty) {
+        // First run: nothing saved yet, so we have to wait for the
+        // phone book once.
+        await _runBackgroundRefresh(silent: false);
+      } else {
+        if (mounted) setState(() => _isLoading = false);
+        // Show last messages and unread counts straight away...
+        if (mounted) await _loadSummariesAndPending();
+        // ...and re-read the phone book afterwards, in the background.
+        _refreshInBackgroundIfStale();
+        return;
       }
 
       if (mounted) {
@@ -393,6 +539,13 @@ class _ChatsScreenState extends State<ChatsScreen> {
     try {
       final fresh = await _preloader.refresh();
       if (!mounted) return;
+
+      // An automatic refresh that failed (e.g. no internet) keeps
+      // the list you already see instead of replacing it with an
+      // empty one and an error.
+      if (silent && fresh.errorMessage != null && _allContacts.isNotEmpty) {
+        return;
+      }
 
       setState(() {
         if (fresh.currentUserId != 0) _currentUserId = fresh.currentUserId;
@@ -418,6 +571,78 @@ class _ChatsScreenState extends State<ChatsScreen> {
     } finally {
       _backgroundRefreshRunning = false;
     }
+  }
+
+  // ============================================================
+  // AUTOMATIC REFRESH
+  // ============================================================
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Contacts may have been added, or friends may have joined
+      // Webs, while the app was in the background.
+      _scheduleAutoRefresh(respectMinGap: true);
+    }
+  }
+
+  Future<void> _refreshInBackgroundIfStale() async {
+    try {
+      final stale = await _preloader.isCacheStale(maxAge: _autoRefreshMinGap);
+      if (stale) _scheduleAutoRefresh(respectMinGap: true);
+    } catch (_) {}
+  }
+
+  void _listenToPhoneBook() {
+    try {
+      _phoneBookSubscription = FlutterContacts.onDatabaseChange.listen(
+        (_) => _scheduleAutoRefresh(respectMinGap: false),
+        onError: (_) {},
+      );
+    } catch (_) {
+      // Listening isn't available (e.g. no permission yet); the
+      // resume / open refresh still covers it.
+    }
+  }
+
+  void _checkProfileChanges(Map<int, UserPresence> presences) {
+    var changed = false;
+    presences.forEach((userId, presence) {
+      final rev = presence.profileRev;
+      if (rev == null) return;
+      final previous = _profileRevs[userId];
+      if (previous != null && previous != rev) {
+        changed = true;
+        // Not in your contacts: their saved name/photo is old now.
+        if (_otherChatUsers.values.any((u) => u.id == userId)) {
+          unawaited(UnknownSenderService.instance.forget(userId));
+        }
+      }
+      _profileRevs[userId] = rev;
+    });
+    if (changed) _scheduleAutoRefresh(respectMinGap: false);
+  }
+
+  /// Runs one silent refresh shortly after the last trigger, so a
+  /// burst of events (e.g. syncing 50 contacts) causes one reload.
+  void _scheduleAutoRefresh({required bool respectMinGap}) {
+    if (respectMinGap) {
+      final last = _lastAutoRefreshAt;
+      if (last != null &&
+          DateTime.now().difference(last) < _autoRefreshMinGap) {
+        return;
+      }
+    }
+
+    _autoRefreshDebounce?.cancel();
+    // Wait a moment: the screen draws first, and a burst of events
+    // (e.g. 50 contacts syncing) becomes a single reload.
+    _autoRefreshDebounce = Timer(const Duration(seconds: 3), () async {
+      if (!mounted || _backgroundRefreshRunning) return;
+      _lastAutoRefreshAt = DateTime.now();
+      await _runBackgroundRefresh(silent: true);
+      await _loadPresences();
+    });
   }
 
   Future<void> _forceRefresh() async {
@@ -569,11 +794,11 @@ class _ChatsScreenState extends State<ChatsScreen> {
       return _buildErrorState();
     }
 
-    if (_allContacts.isEmpty) {
+    if (_allContacts.isEmpty && _otherChatContacts.isEmpty) {
       return _buildEmptyContactsState();
     }
 
-    final filteredRegistered = _applySearch(_registeredContacts);
+    final filteredRegistered = _applySearch(_chatContacts);
     final filteredInvites = _applySearch(_inviteContacts);
 
     final items = <_ChatListItem>[
@@ -667,7 +892,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
                     );
                   case _ChatListItemKind.registered:
                     final contact = item.contact!;
-                    final user = _matchedUsersByPhone[contact.phoneNumber];
+                    final user = _userFor(contact);
                     if (user == null) return const SizedBox.shrink();
                     return RepaintBoundary(
                       child: Padding(
@@ -872,6 +1097,15 @@ class _ChatsScreenState extends State<ChatsScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: WebsColors.textDark(context))),
+                      if (_isOtherChat(contact))
+                        Text(
+                          user.phoneNumber.isNotEmpty
+                              ? 'Not in your contacts · ${user.phoneNumber}'
+                              : 'Not in your contacts',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 11, color: WebsColors.textLight(context)),
+                        ),
                       const SizedBox(height: 4),
                       _buildPreviewLine(summary, user.id),
                     ],
@@ -1074,7 +1308,6 @@ class _ChatsScreenState extends State<ChatsScreen> {
     final message = 'Hi ${contact.name}! I am using Webz, a free app for '
         'private messaging and live location sharing with friends and family. '
         'With Webz you can:\n'
-        '- Track lost devices\n'
         '- Chat privately with your contacts\n'
         '- Share your live location on the map\n'
         '- See which of your contacts are already on Webz\n'
@@ -1082,16 +1315,10 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
     // Encode manually so spaces become %20, not '+'
     final phone = contact.phoneNumber.replaceAll(RegExp(r'[^\d+]'), '');
-    final smsUri = Uri.parse(
-      'sms:$phone?body=${Uri.encodeComponent(message)}',
-    );
+    final smsUri = Uri.parse('sms:$phone?body=${Uri.encodeComponent(message)}');
 
     try {
-      final launched = await launchUrl(
-        smsUri,
-        mode: LaunchMode.externalApplication,
-      );
-
+      final launched = await launchUrl(smsUri, mode: LaunchMode.externalApplication);
       if (!launched && mounted) {
         _showMessage('Could not open the SMS application.');
       }

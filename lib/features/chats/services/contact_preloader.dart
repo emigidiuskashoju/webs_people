@@ -137,7 +137,9 @@ class ContactPreloader {
     }
   }
 
-  Future<bool> isCacheStale() => _cache.isStale();
+  Future<bool> isCacheStale({Duration? maxAge}) => maxAge == null
+      ? _cache.isStale()
+      : _cache.isStale(maxAge: maxAge);
 
   Future<void> clearCache() => _cache.clear();
 

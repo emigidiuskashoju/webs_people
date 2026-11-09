@@ -98,6 +98,9 @@ class ApiEndpoints {
   static const String contactMatch =
       '/contacts/match';
 
+  static const String contactLookup =
+      '/contacts/lookup';
+
   // ============================================================
   // CONNECTIONS
   // ============================================================

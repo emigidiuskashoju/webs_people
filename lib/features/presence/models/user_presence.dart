@@ -5,12 +5,17 @@ class UserPresence {
   final bool typing;
   final String? typingInConversation;
 
+  /// Fingerprint of the user's name + photo. Changes when they edit
+  /// their profile, so the chat list knows to reload them.
+  final String? profileRev;
+
   const UserPresence({
     required this.userId,
     required this.online,
     required this.lastSeenAt,
     required this.typing,
     required this.typingInConversation,
+    this.profileRev,
   });
 
   factory UserPresence.fromJson(
@@ -28,6 +33,7 @@ class UserPresence {
       typing: json['typing'] == true,
       typingInConversation:
           json['typing_in_conversation']?.toString(),
+      profileRev: json['profile_rev']?.toString(),
     );
   }
 
