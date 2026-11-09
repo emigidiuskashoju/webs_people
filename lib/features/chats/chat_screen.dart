@@ -3,6 +3,14 @@ import 'dart:async';
 import 'package:firebase_analytics/firebase_analytics.dart'; // <-- ADDED
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_contacts/flutter_contacts.dart'
+    show
+        Contact,
+        FlutterContacts,
+        Name,
+        PermissionStatus,
+        PermissionType,
+        Phone;
 
 import '../../core/notifications/active_conversation.dart';
 import '../../core/theme/webs_colors.dart';
@@ -23,6 +31,15 @@ class ChatScreen extends StatefulWidget {
   final String phoneNumber;
   final String? profilePhotoUrl;
 
+  /// False when this person is not saved in the phone's contacts.
+  /// The chat then shows their number as the title and a bar with
+  /// their registered name, number and a "Save contact" button.
+  final bool isSavedContact;
+
+  /// The name they typed when registering on Webs (only used when
+  /// [isSavedContact] is false).
+  final String? registeredName;
+
   const ChatScreen({
     super.key,
     required this.currentUserId,
@@ -30,6 +47,8 @@ class ChatScreen extends StatefulWidget {
     required this.name,
     required this.phoneNumber,
     this.profilePhotoUrl,
+    this.isSavedContact = true,
+    this.registeredName,
   });
 
   @override
@@ -51,6 +70,24 @@ class _ChatScreenState extends State<ChatScreen> {
   Timer? _presencePollTimer;
 
   UserPresence? _presence;
+
+  // "Save contact" bar
+  bool _savedToContacts = false;
+  bool _savingContact = false;
+
+  bool get _showSaveContactBar =>
+      !widget.isSavedContact &&
+      !_savedToContacts &&
+      widget.phoneNumber.trim().isNotEmpty;
+
+  /// Title of the chat: their number until saved, then their name.
+  String get _title {
+    if (_savedToContacts) {
+      final registered = widget.registeredName?.trim() ?? '';
+      if (registered.isNotEmpty) return registered;
+    }
+    return widget.name;
+  }
 
   /// Set to true while we believe the remote is typing in this
   /// conversation. Updated by the presence poll.
@@ -1027,6 +1064,137 @@ class _ChatScreenState extends State<ChatScreen> {
   // Build
   // ===================================================================
 
+  // ============================================================
+  // SAVE CONTACT (person not in the phone book)
+  // ============================================================
+
+  Future<void> _saveToContacts() async {
+    if (_savingContact) return;
+    setState(() => _savingContact = true);
+
+    try {
+      final status = await FlutterContacts.permissions.request(
+        PermissionType.readWrite,
+      );
+
+      if (status != PermissionStatus.granted &&
+          status != PermissionStatus.limited) {
+        _snack(
+          'Allow Webz to access your contacts in phone Settings to '
+          'save this number.',
+        );
+        return;
+      }
+
+      // Split "John Peter Doe" into first "John", last "Peter Doe".
+      final registered = widget.registeredName?.trim() ?? '';
+      final parts = registered.isEmpty
+          ? <String>[]
+          : registered.split(RegExp(r'\s+'));
+      final first = parts.isNotEmpty ? parts.first : widget.phoneNumber;
+      final last = parts.length > 1 ? parts.sublist(1).join(' ') : null;
+
+      await FlutterContacts.create(
+        Contact(
+          name: Name(first: first, last: last),
+          phones: [Phone(number: widget.phoneNumber)],
+        ),
+      );
+
+      if (!mounted) return;
+      setState(() => _savedToContacts = true);
+      _snack('Saved to your contacts.');
+      // The chats list notices the phone-book change by itself and
+      // moves this chat in with your other contacts.
+    } catch (_) {
+      _snack('Could not save the contact. Please try again.');
+    } finally {
+      if (mounted) setState(() => _savingContact = false);
+    }
+  }
+
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  /// Bar above the message box: who this is and a Save button.
+  Widget _buildSaveContactBar() {
+    final registered = widget.registeredName?.trim() ?? '';
+    final textDark = WebsColors.textDark(context);
+    final textLight = WebsColors.textLight(context);
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: WebsColors.surface(context),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: WebsColors.border(context), width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.person_outline, size: 18, color: textLight),
+              const SizedBox(width: 6),
+              Text(
+                'Not in your contacts',
+                style: TextStyle(fontSize: 12, color: textLight),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (registered.isNotEmpty)
+            Text(
+              '~ $registered',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: textDark,
+              ),
+            ),
+          Text(
+            widget.phoneNumber,
+            style: TextStyle(fontSize: 14, color: textDark),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: _savingContact ? null : _saveToContacts,
+              icon: _savingContact
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.person_add_alt_1),
+              label: const Text('Save contact'),
+              style: FilledButton.styleFrom(
+                backgroundColor: WebsColors.primaryGreen,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -1041,7 +1209,11 @@ class _ChatScreenState extends State<ChatScreen> {
           children: [
             CachedAvatar(
               photoUrl: widget.profilePhotoUrl,
-              fallbackInitial: widget.name.isNotEmpty ? widget.name : '?',
+              // A number would show "+" as the initial; use the name
+              // they registered with instead.
+              fallbackInitial: (widget.registeredName?.trim().isNotEmpty ?? false)
+                  ? widget.registeredName!.trim()
+                  : (_title.isNotEmpty ? _title : '?'),
               radius: 20,
             ),
             const SizedBox(width: 10),
@@ -1051,7 +1223,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Text(
-                    widget.name,
+                    _title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -1077,6 +1249,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   )
                 : _buildChatContent(),
           ),
+          if (_showSaveContactBar) _buildSaveContactBar(),
           _buildComposer(),
         ],
       ),

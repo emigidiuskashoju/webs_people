@@ -211,16 +211,24 @@ class _WebsAppState extends State<WebsApp> {
       }
     }
 
-    // Sender is not in the phone contacts: ask who they are.
+    // Sender is not in the phone contacts: ask who they are, and
+    // title the chat with their number (like WhatsApp).
+    var isSavedContact = true;
+    String? registeredName;
     if (name == 'Chat') {
+      isSavedContact = false;
       final found = (await UnknownSenderService.instance
           .resolve({otherUserId}))[otherUserId];
       if (found != null) {
-        name = found.name.trim().isNotEmpty
-            ? found.name.trim()
-            : (found.phoneNumber.isNotEmpty ? found.phoneNumber : name);
+        registeredName =
+            found.name.trim().isNotEmpty ? found.name.trim() : null;
+        name = found.phoneNumber.isNotEmpty
+            ? found.phoneNumber
+            : (registeredName ?? 'Webs user');
         phoneNumber = found.phoneNumber;
         profilePhotoUrl = found.profilePhotoUrl;
+      } else {
+        name = 'Webs user';
       }
     }
 
@@ -235,6 +243,8 @@ class _WebsAppState extends State<WebsApp> {
           name: name,
           phoneNumber: phoneNumber,
           profilePhotoUrl: profilePhotoUrl,
+          isSavedContact: isSavedContact,
+          registeredName: registeredName,
         ),
       ),
     );

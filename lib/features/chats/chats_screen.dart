@@ -72,6 +72,11 @@ class _ChatsScreenState extends State<ChatsScreen> with WidgetsBindingObserver {
   List<PhoneContact> _otherChatContacts = [];
   Map<String, ContactMatchUser> _otherChatUsers = {};
 
+  /// Name each of those people typed when they registered on Webs.
+  /// Shown as "~ Name" under their number (like WhatsApp), never as
+  /// the title, because you haven't saved them yourself.
+  Map<String, String> _otherChatRegisteredNames = {};
+
   Map<String, ConversationSummary> _summaries = {};
   Map<int, UserPresence> _presences = {};
 
@@ -297,7 +302,10 @@ class _ChatsScreenState extends State<ChatsScreen> with WidgetsBindingObserver {
       final digitsQuery = _searchQuery.replaceAll(RegExp(r'\D'), '');
       final digitsPhone = phone.replaceAll(RegExp(r'\D'), '');
 
-      final matchesName = name.contains(_searchQuery);
+      final registeredName =
+          (_otherChatRegisteredNames[contact.phoneNumber] ?? '').toLowerCase();
+      final matchesName = name.contains(_searchQuery) ||
+          (registeredName.isNotEmpty && registeredName.contains(_searchQuery));
       final matchesPhone = digitsQuery.isNotEmpty
           ? digitsPhone.contains(digitsQuery)
           : phone.contains(_searchQuery);
@@ -390,17 +398,20 @@ class _ChatsScreenState extends State<ChatsScreen> with WidgetsBindingObserver {
 
     final users = <String, ContactMatchUser>{};
     final contacts = <PhoneContact>[];
+    final registeredNames = <String, String>{};
 
     for (final id in otherIds) {
       final key = '$_otherChatKeyPrefix$id';
       final found = resolved[id];
       final name = found?.name.trim() ?? '';
       final phone = found?.phoneNumber.trim() ?? '';
-      // Even if the lookup failed (offline), still show the chat so
-      // the messages can be read.
-      final displayName = name.isNotEmpty
-          ? name
-          : (phone.isNotEmpty ? phone : 'Webs user');
+      // Not a saved contact: the title is their phone number, like
+      // WhatsApp. Even if the lookup failed (offline), still show the
+      // chat so the messages can be read.
+      final displayName = phone.isNotEmpty
+          ? phone
+          : (name.isNotEmpty ? name : 'Webs user');
+      if (name.isNotEmpty) registeredNames[key] = name;
 
       users[key] = ContactMatchUser(
         id: id,
@@ -414,6 +425,7 @@ class _ChatsScreenState extends State<ChatsScreen> with WidgetsBindingObserver {
     setState(() {
       _otherChatUsers = users;
       _otherChatContacts = contacts;
+      _otherChatRegisteredNames = registeredNames;
     });
     unawaited(_loadPresences());
   }
@@ -1035,7 +1047,12 @@ class _ChatsScreenState extends State<ChatsScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildRegisteredAvatar(PhoneContact contact, ContactMatchUser user) {
-    final displayName = user.name.trim().isNotEmpty ? user.name.trim() : contact.name.trim();
+    // For people not in your contacts the title is a number, which
+    // would give "+" as the initial; use their registered name.
+    final registered = _otherChatRegisteredNames[contact.phoneNumber] ?? '';
+    final displayName = registered.isNotEmpty
+        ? registered
+        : (user.name.trim().isNotEmpty ? user.name.trim() : contact.name.trim());
     return CachedAvatar(photoUrl: user.profilePhotoUrl, fallbackInitial: displayName.isNotEmpty ? displayName : '?', radius: 28);
   }
 
@@ -1099,8 +1116,8 @@ class _ChatsScreenState extends State<ChatsScreen> with WidgetsBindingObserver {
                       Text(displayName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: WebsColors.textDark(context))),
                       if (_isOtherChat(contact))
                         Text(
-                          user.phoneNumber.isNotEmpty
-                              ? 'Not in your contacts · ${user.phoneNumber}'
+                          _otherChatRegisteredNames[contact.phoneNumber] != null
+                              ? '~ ${_otherChatRegisteredNames[contact.phoneNumber]} · Not in your contacts'
                               : 'Not in your contacts',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -1296,6 +1313,8 @@ class _ChatsScreenState extends State<ChatsScreen> with WidgetsBindingObserver {
           name: user.name.trim().isNotEmpty ? user.name.trim() : contact.name,
           phoneNumber: user.phoneNumber,
           profilePhotoUrl: user.profilePhotoUrl,
+          isSavedContact: !_isOtherChat(contact),
+          registeredName: _otherChatRegisteredNames[contact.phoneNumber],
         ),
       ),
     );
