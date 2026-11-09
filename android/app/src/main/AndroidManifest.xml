@@ -17,11 +17,10 @@ xmlns:tools="http://schemas.android.com/tools">
     <!-- EXISTING PERMISSIONS -->
     <!-- ========================================================= -->
 
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- CAMERA, RECORD_AUDIO, CHANGE_NETWORK_STATE and
+         MODIFY_AUDIO_SETTINGS were removed with the calling feature.
+         Photos are picked from the gallery, which needs none of them. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.WRITE_CONTACTS" />
 

@@ -76,9 +76,25 @@ android {
             signingConfig = if (keystorePropertiesFile.exists()) {
                 signingConfigs.getByName("release")
             } else {
+                // Only reachable for debug/profile tooling; a real
+                // release build is stopped below.
                 signingConfigs.getByName("debug")
             }
         }
+    }
+}
+
+// Never ship a release APK signed with the debug key. An APK signed
+// with a different key cannot update the installed app ("App not
+// installed"). v1.0.0 went out with the debug key by accident, so
+// phones that still have v1.0.0 cannot update without uninstalling.
+gradle.taskGraph.whenReady {
+    val buildingRelease = allTasks.any { it.name.contains("Release") }
+    if (buildingRelease && !keystorePropertiesFile.exists()) {
+        throw GradleException(
+            "android/key.properties is missing. Release builds must be " +
+            "signed with the Webz release key."
+        )
     }
 }
 

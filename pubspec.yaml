@@ -3,7 +3,7 @@ description: "A new Flutter project."
 
 publish_to: 'none'
 
-version: 1.0.17+19
+version: 1.0.18+20
 
 environment:
   sdk: ^3.11.5
@@ -45,9 +45,6 @@ dependencies:
 
   # Media / files
   image_picker: ^1.2.3
-
-  # Calling
-  flutter_webrtc: ^1.6.2+hotfix.3
 
   # External apps
   url_launcher: ^6.3.3
