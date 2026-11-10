@@ -51,7 +51,13 @@ class PhoneNumberField extends StatefulWidget {
     required String phoneCode,
     required String localNumber,
   }) {
-    final digits = localNumber.replaceAll(RegExp(r'\D'), '');
+    // Drop the local trunk 0 people type out of habit
+    // ("0712345678" -> "712345678"). Otherwise the number is saved
+    // as "+2550712345678" and no one can find this user from their
+    // phone contacts.
+    final digits = localNumber
+        .replaceAll(RegExp(r'\D'), '')
+        .replaceFirst(RegExp(r'^0+'), '');
     return '+$phoneCode$digits';
   }
 

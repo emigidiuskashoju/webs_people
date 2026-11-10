@@ -13,6 +13,7 @@ import 'package:flutter_contacts/flutter_contacts.dart'
         Phone;
 
 import '../../core/notifications/active_conversation.dart';
+import '../../core/notifications/notification_service.dart';
 import '../../core/theme/webs_colors.dart';
 import '../../core/widgets/cached_avatar.dart';
 import '../map/map_screen.dart';
@@ -127,6 +128,8 @@ class _ChatScreenState extends State<ChatScreen> {
     // ----------------------------------
 
     ActiveConversation.instance.enter(_conversationId);
+    // Opening the chat clears its notifications, like WhatsApp.
+    unawaited(NotificationService.instance.cancelConversation(_conversationId));
 
     _messageController.addListener(_onComposerChanged);
 

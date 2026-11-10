@@ -3,7 +3,6 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/errors/api_exception.dart';
 import '../../../core/notifications/active_conversation.dart';
-import '../../../core/notifications/notification_service.dart';
 import '../models/chat_message.dart';
 import '../services/message_service.dart';
 import 'chat_database.dart';
@@ -219,16 +218,14 @@ class ChatRepository {
             ActiveConversation.instance.isActive(conversationId);
 
         if (!isViewing) {
-          await NotificationService.instance
-              .showMessageNotification(
-            senderName: 'New message',
-            text: serverMessage.message,
-            conversationId: conversationId,
-          );
-
+          // No notification here. Every message already got one from
+          // the push (shown by Android when the app is closed, or by
+          // FcmService when it is open). Showing another one when the
+          // app downloads the message was the "same notification
+          // again" bug.
           debugPrint(
-            'RECV: fired notification for '
-            'serverId=${serverMessage.serverMessageId}',
+            'RECV: stored serverId=${serverMessage.serverMessageId} '
+            '(push already notified)',
           );
         } else {
           debugPrint(

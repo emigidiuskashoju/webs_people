@@ -90,6 +90,23 @@ class NotificationService {
 
     await _createChannels();
     await _requestPermissions();
+
+    // If the app was closed and the user started it by tapping one
+    // of OUR notifications, Android hands the tap over here (it does
+    // not go to onDidReceiveNotificationResponse). Without this the
+    // app just opened the chats list.
+    try {
+      final launch = await _plugin.getNotificationAppLaunchDetails();
+      final response = launch?.notificationResponse;
+      if ((launch?.didNotificationLaunchApp ?? false) && response != null) {
+        Future<void>.delayed(
+          const Duration(milliseconds: 300),
+          () => _onNotificationTap(response),
+        );
+      }
+    } catch (e) {
+      debugPrint('NOTIF: launch details failed: $e');
+    }
   }
 
   Future<void> _createChannels() async {
@@ -172,6 +189,16 @@ class NotificationService {
 
   Future<void> cancelNotification(int id) async {
     await _plugin.cancel(id);
+  }
+
+  /// Removes this chat's notifications from the notification shade:
+  /// the one the app showed itself, and the one Android showed from
+  /// the push (the server tags it with the conversation id).
+  Future<void> cancelConversation(String conversationId) async {
+    try {
+      await _plugin.cancel(conversationId.hashCode);
+      await _plugin.cancel(0, tag: conversationId);
+    } catch (_) {}
   }
 
   Future<void> _vibrateForIncomingCall() async {

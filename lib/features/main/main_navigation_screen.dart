@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/notifications/notification_tap_gate.dart';
 import '../../core/theme/webs_colors.dart';
 import '../auth/screens/login_screen.dart';
 import '../chats/chats_screen.dart';
@@ -30,6 +31,15 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       ChatsScreen(preloaded: widget.preloadedChats),
       const SettingsScreen(),
     ];
+    // Now a tapped notification can open its chat on top of this
+    // screen (including one tapped while the app was starting).
+    NotificationTapGate.instance.markReadyAfterFirstFrame();
+  }
+
+  @override
+  void dispose() {
+    NotificationTapGate.instance.markNotReady();
+    super.dispose();
   }
 
   void _onNavigationItemTapped(int index) {

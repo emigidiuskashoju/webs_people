@@ -103,6 +103,18 @@ class PhoneContactsService {
       phone = '+$_defaultCountryCode${phone.substring(1)}';
     }
 
+    // Saved without the 0: 712345678 -> +255712345678
+    if (RegExp(r'^[67]\d{8}$').hasMatch(phone)) {
+      phone = '+$_defaultCountryCode$phone';
+    }
+
+    // Code plus the local 0: +2550712345678 -> +255712345678
+    final withTrunkZero =
+        RegExp('^\\+?${_defaultCountryCode}0(\\d{9})\$').firstMatch(phone);
+    if (withTrunkZero != null) {
+      phone = '+$_defaultCountryCode${withTrunkZero.group(1)}';
+    }
+
     if (!phone.startsWith('+')) {
       if (RegExp(r'^\d{10,15}$').hasMatch(phone)) {
         phone = '+$phone';

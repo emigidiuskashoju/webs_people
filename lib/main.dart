@@ -9,7 +9,9 @@ import 'app/splash_screen.dart';
 import 'core/background/background_location_service.dart';
 import 'core/notifications/fcm_service.dart';
 import 'core/notifications/location_notification_listener.dart';
+import 'core/notifications/active_conversation.dart';
 import 'core/notifications/notification_service.dart';
+import 'core/notifications/notification_tap_gate.dart';
 import 'core/storage/auth_storage.dart';
 import 'features/auth/screens/register_screen.dart';
 import 'features/chats/chat_screen.dart';
@@ -163,18 +165,24 @@ class _WebsAppState extends State<WebsApp> {
   // ============================================================
 
   void _listenForNotificationTaps() {
-    _localNotificationTapSubscription =
-        NotificationService.instance.notificationTaps.listen((payload) {
-      _handleConversationTap(payload);
-    });
+    // Taps go through the gate, which holds them until the chats
+    // screen is showing (see NotificationTapGate).
+    NotificationTapGate.instance.opener = _handleConversationTap;
 
-    _fcmTapSubscription =
-        FcmService.instance.messageTaps.listen((payload) {
-      _handleConversationTap(payload);
-    });
+    _localNotificationTapSubscription =
+        NotificationService.instance.notificationTaps.listen(
+      NotificationTapGate.instance.open,
+    );
+
+    _fcmTapSubscription = FcmService.instance.messageTaps.listen(
+      NotificationTapGate.instance.open,
+    );
   }
 
   Future<void> _handleConversationTap(String conversationId) async {
+    // Already looking at this chat: nothing to open.
+    if (ActiveConversation.instance.isActive(conversationId)) return;
+
     final preloaded = await _waitForPreloadedChats();
 
     final currentUserId = preloaded?.currentUserId;
@@ -293,7 +301,7 @@ class _WebsAppState extends State<WebsApp> {
 
     LocationNotificationListener.instance.forget(requestId);
 
-    _handleConversationTap(conversationId);
+    NotificationTapGate.instance.open(conversationId);
   }
 
   // ============================================================

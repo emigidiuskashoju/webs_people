@@ -598,10 +598,16 @@ class _ChatsScreenState extends State<ChatsScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// After the chats screen is shown, quietly re-read contacts if the
+  /// saved copy is more than a few seconds old. This is what makes a
+  /// contact's new profile photo appear on reopening without a manual
+  /// pull-to-refresh. It runs in the background, so opening stays fast.
+  static const Duration _openRefreshMaxAge = Duration(seconds: 20);
+
   Future<void> _refreshInBackgroundIfStale() async {
     try {
-      final stale = await _preloader.isCacheStale(maxAge: _autoRefreshMinGap);
-      if (stale) _scheduleAutoRefresh(respectMinGap: true);
+      final stale = await _preloader.isCacheStale(maxAge: _openRefreshMaxAge);
+      if (stale) _scheduleAutoRefresh(respectMinGap: false);
     } catch (_) {}
   }
 
