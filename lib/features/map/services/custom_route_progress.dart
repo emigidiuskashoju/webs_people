@@ -7,10 +7,15 @@ class CustomRouteProgress {
   final double remainingDistanceMeters;
   final double travelledDistanceMeters;
 
+  /// True when the measured location is actually on the route (close
+  /// enough to count), vs far away (then the whole route is returned).
+  final bool onRoute;
+
   const CustomRouteProgress({
     required this.remainingPoints,
     required this.remainingDistanceMeters,
     required this.travelledDistanceMeters,
+    this.onRoute = false,
   });
 
   bool get isComplete =>
@@ -85,6 +90,7 @@ class CustomRouteProgressCalculator {
         remainingDistanceMeters:
             totalDistance,
         travelledDistanceMeters: 0.0,
+        onRoute: false,
       );
     }
 
@@ -111,6 +117,7 @@ class CustomRouteProgressCalculator {
           remainingDistance,
       travelledDistanceMeters:
           travelledDistance,
+      onRoute: true,
     );
   }
 

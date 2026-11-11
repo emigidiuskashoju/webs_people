@@ -126,6 +126,8 @@ class _MapScreenState extends State<MapScreen> {
 
   Place? _activeDestination;
   List<LatLng> _destinationRouteGeometry = <LatLng>[];
+  // Up to two alternative routes, shown faintly behind the main one.
+  List<List<LatLng>> _alternativeRoutes = <List<LatLng>>[];
   double? _destinationRemainingMeters;
   double? _destinationRemainingSeconds;
   LatLng? _lastRouteOrigin;
@@ -504,6 +506,7 @@ class _MapScreenState extends State<MapScreen> {
       });
 
       _updateOtherTicker();
+      _updateCustomRouteProgress(_currentLocation);
     } catch (_) {
     } finally {
       _refreshingOther = false;
@@ -598,12 +601,12 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     try {
-      final result = await _placeRoutingService.fetchRoute(
+      final plan = await _placeRoutingService.fetchRoutes(
         from: origin,
         to: destination.position,
       );
 
-      if (!mounted || result == null) {
+      if (!mounted || plan == null) {
         if (mounted && isManualReroute) {
           setState(() => _destinationRerouting = false);
         }
@@ -611,15 +614,16 @@ class _MapScreenState extends State<MapScreen> {
       }
 
       setState(() {
-        _destinationRouteGeometry = result.geometry;
-        _destinationRemainingMeters = result.distanceMeters;
-        _destinationRemainingSeconds = result.durationSeconds;
+        _destinationRouteGeometry = plan.main.geometry;
+        _alternativeRoutes = plan.alternatives;
+        _destinationRemainingMeters = plan.main.distanceMeters;
+        _destinationRemainingSeconds = plan.main.durationSeconds;
         _lastRouteOrigin = origin;
         _destinationRerouting = false;
       });
 
-      if (result.geometry.length >= 2) {
-        final bounds = LatLngBounds.fromPoints(result.geometry);
+      if (plan.main.geometry.length >= 2) {
+        final bounds = LatLngBounds.fromPoints(plan.main.geometry);
         _mapController.fitCamera(
           CameraFit.bounds(
             bounds: bounds,
@@ -673,6 +677,9 @@ class _MapScreenState extends State<MapScreen> {
       _destinationRemainingMeters = remainingDistance;
       _destinationRemainingSeconds =
           (_destinationRemainingSeconds ?? 0) * speedFactor;
+      // Once the user is actually moving along the main route, drop
+      // the faint alternatives so the map stays clean (like Google).
+      _alternativeRoutes = <List<LatLng>>[];
     });
   }
 
@@ -681,6 +688,7 @@ class _MapScreenState extends State<MapScreen> {
     setState(() {
       _activeDestination = null;
       _destinationRouteGeometry = <LatLng>[];
+      _alternativeRoutes = <List<LatLng>>[];
       _destinationRemainingMeters = null;
       _destinationRemainingSeconds = null;
       _lastRouteOrigin = null;
@@ -821,6 +829,7 @@ class _MapScreenState extends State<MapScreen> {
       });
 
       _updateOtherTicker();
+      _updateCustomRouteProgress(_currentLocation);
 
       // Only build the connecting route once, or when we don't
       // have one yet. Manual recalculation is done by the caller
@@ -903,13 +912,40 @@ class _MapScreenState extends State<MapScreen> {
 
   void _updateCustomRouteProgress(LatLng? location) {
     final route = _customRoute;
-    if (route == null || location == null || route.points.length < 2) return;
-    final progress = CustomRouteProgressCalculator.calculate(
-      currentLocation: location,
-      route: route.positions,
-    );
+    if (route == null || route.points.length < 2) return;
+
+    // The custom route is a path one person draws for the other to
+    // follow. Both connected users are considered, so the route also
+    // shrinks on the drawer's phone as the follower advances (before,
+    // it only moved on the phone that was walking).
+    //
+    // Among the users actually ON the route, the one who has advanced
+    // the LEAST is the follower still making their way to the end, so
+    // the remaining path is measured from them. A person waiting at
+    // the destination end does not count as "remaining 0".
+    CustomRouteProgress? progress;
+    for (final loc in <LatLng?>[location, _otherLocation]) {
+      if (loc == null) continue;
+      final p = CustomRouteProgressCalculator.calculate(
+        currentLocation: loc,
+        route: route.positions,
+      );
+      if (!p.onRoute) continue;
+      if (progress == null ||
+          p.travelledDistanceMeters < progress.travelledDistanceMeters) {
+        progress = p;
+      }
+    }
+    // Nobody is on the route yet: leave it as drawn.
+    if (progress == null) return;
+
+    // Copy into a final so it stays non-null inside the setState
+    // closures below (Dart drops the null-promotion of a mutable
+    // local variable once you use it inside a closure).
+    final chosen = progress;
+
     if (!mounted) return;
-    if (progress.isComplete) {
+    if (chosen.isComplete) {
       setState(() {
         _customRouteRemainingPoints = [];
         _customRouteRemainingDistance = 0;
@@ -918,8 +954,8 @@ class _MapScreenState extends State<MapScreen> {
       return;
     }
     setState(() {
-      _customRouteRemainingPoints = progress.remainingPoints;
-      _customRouteRemainingDistance = progress.remainingDistanceMeters;
+      _customRouteRemainingPoints = chosen.remainingPoints;
+      _customRouteRemainingDistance = chosen.remainingDistanceMeters;
     });
   }
 
@@ -2149,13 +2185,32 @@ class _MapScreenState extends State<MapScreen> {
                     ],
                   ),
 
+                // Alternative routes: faint blue, drawn underneath.
+                if (_activeDestination != null &&
+                    _alternativeRoutes.isNotEmpty)
+                  PolylineLayer(
+                    polylines: [
+                      for (final alt in _alternativeRoutes)
+                        if (alt.length >= 2)
+                          Polyline(
+                            points: alt,
+                            strokeWidth: 4,
+                            color: const Color(0xFF1976D2)
+                                .withValues(alpha: 0.30),
+                            strokeCap: StrokeCap.round,
+                            strokeJoin: StrokeJoin.round,
+                          ),
+                    ],
+                  ),
+
+                // Main route: deep blue.
                 if (_destinationRouteGeometry.length >= 2)
                   PolylineLayer(
                     polylines: [
                       Polyline(
                         points: _destinationRouteGeometry,
                         strokeWidth: 6,
-                        color: const Color(0xFF1976D2),
+                        color: const Color(0xFF0D47A1),
                         strokeCap: StrokeCap.round,
                         strokeJoin: StrokeJoin.round,
                       ),
@@ -2240,6 +2295,28 @@ class _MapScreenState extends State<MapScreen> {
                   ],
                 ),
               ],
+            ),
+          ),
+
+          // Map data attribution (required by Mapbox and Esri).
+          Positioned(
+            right: 6,
+            top: showOtherTicker ? tickerHeight + 6 : 6,
+            child: IgnorePointer(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.45),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  _mapStyle.attribution,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 9,
+                  ),
+                ),
+              ),
             ),
           ),
 

@@ -52,18 +52,22 @@ class PhoneContactsService {
       }
 
       for (final phone in contact.phones) {
-        final normalized = normalizePhoneNumber(phone.number);
+        // Strict first (best for matching Webs users), then a loose
+        // fallback so a contact saved in an unusual format still
+        // shows up (in the Invite list) instead of vanishing.
+        final number =
+            normalizePhoneNumber(phone.number) ?? _looseNumber(phone.number);
 
-        if (normalized == null) {
+        if (number == null) {
           skippedBadNumber++;
-          _log('  Skipped invalid: "$name" -> "${phone.number}"');
+          _log('  Skipped (no usable digits): "$name" -> "${phone.number}"');
           continue;
         }
 
         results.add(
           PhoneContact(
-            name: name.isEmpty ? normalized : name,
-            phoneNumber: normalized,
+            name: name.isEmpty ? number : name,
+            phoneNumber: number,
           ),
         );
       }
@@ -84,6 +88,29 @@ class PhoneContactsService {
     }
 
     return deduped;
+  }
+
+  /// Best-effort number for a contact that failed strict
+  /// normalization, so it is still shown (and can be invited)
+  /// instead of being dropped. Any entry with at least 7 digits is
+  /// kept; a plain local number still gets the Tanzania code.
+  String? _looseNumber(String value) {
+    final digits = value.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.length < 7) return null;
+
+    // Local mobile forms we recognise get the country code.
+    if (digits.length == 10 && digits.startsWith('0')) {
+      return '+$_defaultCountryCode${digits.substring(1)}';
+    }
+    if (digits.length == 9 &&
+        (digits.startsWith('6') || digits.startsWith('7'))) {
+      return '+$_defaultCountryCode$digits';
+    }
+
+    // Already looks international, or some other format: keep the
+    // digits as-is behind a '+'. It simply won't match a Webs user,
+    // which is fine for the Invite list.
+    return '+$digits';
   }
 
   String? normalizePhoneNumber(String value) {

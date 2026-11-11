@@ -77,19 +77,23 @@ class MapStyleSheet extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
-            Row(
-              children: MapStyleKind.values.map((kind) {
-                return Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
-                    child: _StyleTile(
-                      kind: kind,
-                      isSelected: kind == current,
-                      onTap: () => onSelected(kind),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: MapStyleKind.values.map((kind) {
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: SizedBox(
+                      width: 108,
+                      child: _StyleTile(
+                        kind: kind,
+                        isSelected: kind == current,
+                        onTap: () => onSelected(kind),
+                      ),
                     ),
-                  ),
-                );
-              }).toList(),
+                  );
+                }).toList(),
+              ),
             ),
           ],
         ),
@@ -119,14 +123,7 @@ class _StyleTile extends StatelessWidget {
     // here so this widget doesn't depend on map tile internals.
     const token = kMapboxAccessToken;
 
-    switch (kind) {
-      case MapStyleKind.defaultStyle:
-        return 'https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/-6.7924,39.2083,10,0/200x200?access_token=$token';
-      case MapStyleKind.satellite:
-        return 'https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/static/-6.7924,39.2083,10,0/200x200?access_token=$token';
-      case MapStyleKind.terrain:
-        return 'https://api.mapbox.com/styles/v1/mapbox/outdoors-v12/static/-6.7924,39.2083,10,0/200x200?access_token=$token';
-    }
+    return 'https://api.mapbox.com/styles/v1/mapbox/${kind.mapboxSlug}/static/-6.7924,39.2083,10,0/200x200?access_token=$token';
   }
 
   @override
@@ -157,14 +154,26 @@ class _StyleTile extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             kind.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              fontSize: 13,
+              fontSize: 14,
               fontWeight: isSelected
                   ? FontWeight.bold
-                  : FontWeight.normal,
+                  : FontWeight.w600,
               color: isSelected
                   ? WebsColors.primaryGreen
                   : WebsColors.textDark(context),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            kind.description,
+            maxLines: 2,
+            style: TextStyle(
+              fontSize: 11,
+              height: 1.2,
+              color: WebsColors.textLight(context),
             ),
           ),
         ],
