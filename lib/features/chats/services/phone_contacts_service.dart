@@ -64,6 +64,13 @@ class PhoneContactsService {
           continue;
         }
 
+        // Safety net: never let an over-long value reach the server
+        // match call (it rejects anything over 20 characters).
+        if (number.length > 16) {
+          skippedBadNumber++;
+          continue;
+        }
+
         results.add(
           PhoneContact(
             name: name.isEmpty ? number : name,
@@ -96,7 +103,10 @@ class PhoneContactsService {
   /// kept; a plain local number still gets the Tanzania code.
   String? _looseNumber(String value) {
     final digits = value.replaceAll(RegExp(r'[^0-9]'), '');
-    if (digits.length < 7) return null;
+    // A real phone number is 7-15 digits (E.164 caps at 15). Anything
+    // longer is not a phone number, and would also break the server
+    // match request, which rejects numbers over 20 characters.
+    if (digits.length < 7 || digits.length > 15) return null;
 
     // Local mobile forms we recognise get the country code.
     if (digits.length == 10 && digits.startsWith('0')) {

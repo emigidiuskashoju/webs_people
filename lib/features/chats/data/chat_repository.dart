@@ -315,6 +315,55 @@ class ChatRepository {
   }
 
   // ===================================================================
+  // SYNC MY MESSAGES' DELIVERED / READ STATE
+  // ===================================================================
+
+  /// Updates the sender's own messages in [conversationId] to
+  /// delivered (two grey ticks) or read (two blue ticks), by asking
+  /// the server about the ones that are still only "sent"/"delivered".
+  Future<bool> syncMessageStatuses({
+    required String conversationId,
+    required int currentUserId,
+  }) async {
+    final messages = await _database.getConversation(
+      conversationId,
+      currentUserId: currentUserId,
+    );
+
+    // My messages that could still be upgraded.
+    final pending = messages.where((m) =>
+        m.isMine &&
+        m.serverId != null &&
+        (m.status == MessageStatus.sent ||
+            m.status == MessageStatus.delivered));
+
+    final ids = pending.map((m) => m.serverId!).toList();
+    if (ids.isEmpty) return false;
+
+    final statuses = await _messageService.fetchMessageStatuses(ids);
+    if (statuses.isEmpty) return false;
+
+    var changed = false;
+    for (final message in pending) {
+      final info = statuses[message.serverId!];
+      if (info == null) continue;
+
+      MessageStatus? next;
+      if (info.read && message.status != MessageStatus.read) {
+        next = MessageStatus.read;
+      } else if (info.delivered && message.status == MessageStatus.sent) {
+        next = MessageStatus.delivered;
+      }
+
+      if (next != null) {
+        await _database.updateMessage(message.copyWith(status: next));
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  // ===================================================================
   // RETRY
   // ===================================================================
 

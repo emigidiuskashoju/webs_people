@@ -720,6 +720,8 @@ class _ChatsScreenState extends State<ChatsScreen> with WidgetsBindingObserver {
       return;
     }
 
+    final working = List<SavedAccount>.from(accounts);
+
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -728,61 +730,144 @@ class _ChatsScreenState extends State<ChatsScreen> with WidgetsBindingObserver {
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Switch account',
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: WebsColors.textDark(context)),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Choose a saved Webs account.',
-                  style: TextStyle(color: WebsColors.textLight(context)),
-                ),
-                const SizedBox(height: 16),
-                ...accounts.map((account) {
-                  final isCurrent = account.token == currentToken;
-                  final displayName = account.name.trim().isNotEmpty ? account.name.trim() : 'Webs user';
-
-                  return ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: CircleAvatar(
-                      backgroundColor: WebsColors.softGreen(context),
-                      child: Text(
-                        displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
-                        style: const TextStyle(color: WebsColors.primaryGreen, fontWeight: FontWeight.bold),
-                      ),
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Switch account',
+                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: WebsColors.textDark(context)),
                     ),
-                    title: Text(
-                      displayName,
-                      style: TextStyle(fontWeight: FontWeight.w600, color: WebsColors.textDark(context)),
-                    ),
-                    subtitle: Text(
-                      account.email.trim().isNotEmpty ? account.email : account.phoneNumber,
+                    const SizedBox(height: 6),
+                    Text(
+                      'Choose a saved Webs account, or remove one.',
                       style: TextStyle(color: WebsColors.textLight(context)),
                     ),
-                    trailing: isCurrent
-                        ? const Icon(Icons.check_circle, color: WebsColors.primaryGreen)
-                        : Icon(Icons.chevron_right, color: WebsColors.textLight(context)),
-                    onTap: isCurrent
-                        ? null
-                        : () async {
-                            Navigator.of(context).pop();
-                            await _switchAccount(account);
+                    const SizedBox(height: 16),
+                    ...working.map((account) {
+                      final isCurrent = account.token == currentToken;
+                      final displayName = account.name.trim().isNotEmpty ? account.name.trim() : 'Webs user';
+
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: CircleAvatar(
+                          backgroundColor: WebsColors.softGreen(context),
+                          child: Text(
+                            displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
+                            style: const TextStyle(color: WebsColors.primaryGreen, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        title: Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                displayName,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(fontWeight: FontWeight.w600, color: WebsColors.textDark(context)),
+                              ),
+                            ),
+                            if (isCurrent) ...[
+                              const SizedBox(width: 8),
+                              const Icon(Icons.check_circle, color: WebsColors.primaryGreen, size: 18),
+                            ],
+                          ],
+                        ),
+                        subtitle: Text(
+                          account.email.trim().isNotEmpty ? account.email : account.phoneNumber,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: WebsColors.textLight(context)),
+                        ),
+                        trailing: IconButton(
+                          tooltip: 'Remove account',
+                          icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                          onPressed: () async {
+                            final removed = await _confirmRemoveAccount(account, isCurrent);
+                            if (removed) {
+                              setSheetState(() => working.removeWhere((a) => a.userId == account.userId));
+                            }
                           },
-                  );
-                }),
-              ],
-            ),
-          ),
+                        ),
+                        onTap: isCurrent
+                            ? null
+                            : () async {
+                                Navigator.of(context).pop();
+                                await _switchAccount(account);
+                              },
+                      );
+                    }),
+                    if (working.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Text(
+                          'No saved accounts.',
+                          style: TextStyle(color: WebsColors.textLight(context)),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
         );
       },
     );
+  }
+
+  /// Confirms and removes a saved account from this phone.
+  ///
+  /// Returns true if it was removed. Removing the account you are
+  /// currently signed in to also signs you out.
+  Future<bool> _confirmRemoveAccount(SavedAccount account, bool isCurrent) async {
+    final name = account.name.trim().isNotEmpty ? account.name.trim() : 'this account';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove account?'),
+        content: Text(
+          isCurrent
+              ? 'Remove $name from this phone? You are signed in to it, so '
+                  'you will be signed out. Your chats on this phone will be kept, '
+                  'but you will need to sign in again to use this account.'
+              : 'Remove $name from this phone? You can add it again later by '
+                  'signing in.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return false;
+
+    await _savedAccountStorage.removeAccount(account.userId);
+
+    if (isCurrent) {
+      // Signing out of the active account: clear the token and go to
+      // the registration/login screen.
+      await _authStorage.clearToken();
+      if (!mounted) return true;
+      Navigator.of(context).pop(); // close the sheet
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const MainNavigationScreen()),
+        (route) => false,
+      );
+    } else if (mounted) {
+      _showMessage('Account removed from this phone.');
+    }
+    return true;
   }
 
   Future<void> _switchAccount(SavedAccount account) async {
@@ -1221,8 +1306,9 @@ class _ChatsScreenState extends State<ChatsScreen> with WidgetsBindingObserver {
   }
 
   String _formatRelativeTime(DateTime time) {
+    final local = time.toLocal();
     final now = DateTime.now();
-    final diff = now.difference(time);
+    final diff = now.difference(local);
 
     if (diff.inSeconds < 60) return 'Just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes} min';
@@ -1230,8 +1316,8 @@ class _ChatsScreenState extends State<ChatsScreen> with WidgetsBindingObserver {
     if (diff.inDays == 1) return 'Yesterday';
     if (diff.inDays < 7) return '${diff.inDays} days';
 
-    final day = time.day.toString().padLeft(2, '0');
-    final month = time.month.toString().padLeft(2, '0');
+    final day = local.day.toString().padLeft(2, '0');
+    final month = local.month.toString().padLeft(2, '0');
     return '$day/$month';
   }
 

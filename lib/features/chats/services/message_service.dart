@@ -67,11 +67,13 @@ class PendingServerMessage {
                   ?.toString() ??
               '',
 
+      // Server sends UTC (…Z). Convert to the phone's local time so
+      // the bubble shows the correct clock time, not UTC.
       createdAt:
           DateTime.parse(
         json['created_at']
             .toString(),
-      ),
+      ).toLocal(),
     );
   }
 }
@@ -305,6 +307,36 @@ class MessageService {
           ReadReceipt.fromJson,
         )
         .toList();
+  }
+
+  /// Delivery/read status for the sender's own messages.
+  /// Returns a map of serverMessageId -> (delivered, read).
+  Future<Map<int, ({bool delivered, bool read})>> fetchMessageStatuses(
+    List<int> messageIds,
+  ) async {
+    if (messageIds.isEmpty) return {};
+    final token = await _getToken();
+
+    final response = await _apiClient.post(
+      ApiEndpoints.messageStatuses,
+      token: token,
+      body: {'message_ids': messageIds},
+    );
+
+    if (response is! Map<String, dynamic>) return {};
+    final list = response['statuses'];
+    if (list is! List) return {};
+
+    final result = <int, ({bool delivered, bool read})>{};
+    for (final item in list.whereType<Map<String, dynamic>>()) {
+      final id = item['id'];
+      if (id is! int) continue;
+      result[id] = (
+        delivered: item['delivered'] == true,
+        read: item['read'] == true,
+      );
+    }
+    return result;
   }
 
   Future<void> acknowledgeReadReceipt(

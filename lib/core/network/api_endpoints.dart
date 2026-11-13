@@ -218,6 +218,9 @@ class ApiEndpoints {
   static const String pendingReadReceipts =
       '/messages/read-receipts';
 
+  static const String messageStatuses =
+      '/messages/statuses';
+
   static String acknowledgeReadReceipt(
     int receiptId,
   ) =>

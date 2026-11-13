@@ -265,6 +265,10 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!mounted) return;
     try {
       await _repository.syncReadReceipts();
+      await _repository.syncMessageStatuses(
+        conversationId: _conversationId,
+        currentUserId: widget.currentUserId,
+      );
 
       final messages = await _repository.getConversation(
         _conversationId,
@@ -600,8 +604,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String _formatTime(DateTime dateTime) {
-    final hour = dateTime.hour.toString().padLeft(2, '0');
-    final minute = dateTime.minute.toString().padLeft(2, '0');
+    final local = dateTime.toLocal();
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
     return '$hour:$minute';
   }
 
