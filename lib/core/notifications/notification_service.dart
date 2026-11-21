@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:vibration/vibration.dart';
 
+import 'notification_actions.dart';
 import 'notification_preferences.dart';
 
 class NotificationService {
@@ -74,7 +75,7 @@ class NotificationService {
     }
 
     const androidInit = AndroidInitializationSettings(
-      '@mipmap/ic_launcher',
+      'ic_stat_webs',
     );
 
     const initSettings = InitializationSettings(
@@ -229,6 +230,8 @@ class NotificationService {
     required String senderName,
     required String text,
     required String conversationId,
+    int? senderId,
+    int? serverMessageId,
   }) async {
     if (!_initialized) {
       await initialize();
@@ -245,19 +248,47 @@ class NotificationService {
       channelDescription: _messagesChannelDescription,
       importance: Importance.high,
       priority: Priority.high,
+      icon: 'ic_stat_webs',
+      color: const Color(0xFF25D366),
       vibrationPattern: _messageVibrationPattern,
       playSound: true,
       sound: null,
+      actions: <AndroidNotificationAction>[
+        const AndroidNotificationAction(
+          'msg_reply',
+          'Reply',
+          allowGeneratedReplies: true,
+          inputs: <AndroidNotificationActionInput>[
+            AndroidNotificationActionInput(label: 'Message'),
+          ],
+          showsUserInterface: false,
+          cancelNotification: false,
+        ),
+        const AndroidNotificationAction(
+          'msg_read',
+          'Mark as read',
+          showsUserInterface: false,
+          cancelNotification: true,
+        ),
+      ],
     );
 
     final details = NotificationDetails(android: androidDetails);
+
+    // payload = conversationId | senderId | senderName | serverMessageId
+    final payload = <String>[
+      conversationId,
+      (senderId ?? 0).toString(),
+      senderName,
+      (serverMessageId ?? 0).toString(),
+    ].join(kMsgPayloadSep);
 
     await _plugin.show(
       conversationId.hashCode,
       senderName,
       text,
       details,
-      payload: conversationId,
+      payload: payload,
     );
   }
 
@@ -367,6 +398,13 @@ class NotificationService {
     final payload = response.payload;
     if (payload == null || payload.isEmpty) return;
 
+    // Reply / Mark-as-read buttons (handled without opening the app).
+    if (response.actionId == 'msg_reply' ||
+        response.actionId == 'msg_read') {
+      handleWebsNotificationAction(response);
+      return;
+    }
+
     if (payload.startsWith('call:')) {
       final stripped = payload.substring(5);
       _callTaps.add(stripped);
@@ -386,9 +424,14 @@ class NotificationService {
   }
 
   @pragma('vm:entry-point')
+  @pragma('vm:entry-point')
   static void _onBackgroundNotificationTap(
     NotificationResponse response,
   ) {
     debugPrint('NOTIFICATION TAP (background): ${response.payload}');
+    if (response.actionId == 'msg_reply' ||
+        response.actionId == 'msg_read') {
+      handleWebsNotificationAction(response);
+    }
   }
 }

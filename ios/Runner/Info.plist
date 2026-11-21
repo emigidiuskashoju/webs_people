@@ -49,6 +49,15 @@
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>Webs uses your location in the background so that people you have approved can find your phone if it is lost or stolen.</string>
 
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Webs needs the microphone so you can record voice messages.</string>
+
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Webs needs access to your photos so you can send pictures in chats and set a profile photo.</string>
+
+	<key>NSContactsUsageDescription</key>
+	<string>Webs uses your contacts to show which of them are on Webs and to let you message and save them.</string>
+
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

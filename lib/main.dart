@@ -17,7 +17,6 @@ import 'features/auth/screens/register_screen.dart';
 import 'features/chats/chat_screen.dart';
 import 'features/chats/models/preloaded_chats_data.dart';
 import 'features/chats/services/contact_preloader.dart';
-import 'features/chats/services/unknown_sender_service.dart';
 import 'features/main/main_navigation_screen.dart';
 import 'features/presence/presence_heartbeat.dart';
 import 'features/settings/services/appearance_service.dart';
@@ -179,75 +178,83 @@ class _WebsAppState extends State<WebsApp> {
     );
   }
 
-  Future<void> _handleConversationTap(String conversationId) async {
+  Future<void> _handleConversationTap(String rawPayload) async {
+    // Payload may be a plain conversationId, or
+    // conversationId | senderId | senderName | serverMessageId.
+    final parts0 = rawPayload.split('\u001F');
+    final conversationId = parts0[0];
+    final payloadSenderId =
+        parts0.length > 1 ? int.tryParse(parts0[1]) ?? 0 : 0;
+    final payloadSenderName = parts0.length > 2 ? parts0[2] : '';
+
     // Already looking at this chat: nothing to open.
     if (ActiveConversation.instance.isActive(conversationId)) return;
 
-    final preloaded = await _waitForPreloadedChats();
-
-    final currentUserId = preloaded?.currentUserId;
-    if (currentUserId == null) {
-      debugPrint(
-        'NOTIF-TAP: giving up on $conversationId '
-        '(preloaded chats never loaded)',
-      );
-      return;
-    }
-
-    final parts = conversationId.split('_');
-    if (parts.length != 2) return;
-
-    final a = int.tryParse(parts[0]);
-    final b = int.tryParse(parts[1]);
+    final convParts = conversationId.split('_');
+    if (convParts.length != 2) return;
+    final a = int.tryParse(convParts[0]);
+    final b = int.tryParse(convParts[1]);
     if (a == null || b == null) return;
 
-    final otherUserId = a == currentUserId ? b : a;
+    int? currentUserId;
+    int? otherUserId;
 
-    String name = 'Chat';
+    // Fast path: the notification told us who the sender is, so we can
+    // open the chat immediately without waiting for anything.
+    if (payloadSenderId > 0 && (a == payloadSenderId || b == payloadSenderId)) {
+      otherUserId = payloadSenderId;
+      currentUserId = a == payloadSenderId ? b : a;
+    } else {
+      final preloaded = await _waitForPreloadedChats();
+      currentUserId = preloaded?.currentUserId;
+      if (currentUserId == null) return;
+      otherUserId = a == currentUserId ? b : a;
+    }
+
+    String name = payloadSenderName.trim().isNotEmpty
+        ? payloadSenderName.trim()
+        : 'Chat';
     String phoneNumber = '';
     String? profilePhotoUrl;
+    var isSavedContact = true;
+    String? registeredName;
 
-    final matched = preloaded!.matchedUsersByPhone;
-    for (final entry in matched.entries) {
-      if (entry.value.id == otherUserId) {
-        name = entry.value.name.trim().isNotEmpty
-            ? entry.value.name.trim()
-            : entry.key;
-        phoneNumber = entry.value.phoneNumber;
-        profilePhotoUrl = entry.value.profilePhotoUrl;
-        break;
+    // Use already-loaded contacts if present (no network, no waiting).
+    final preloaded = _preloadedChats;
+    var foundInContacts = false;
+    if (preloaded != null) {
+      for (final entry in preloaded.matchedUsersByPhone.entries) {
+        if (entry.value.id == otherUserId) {
+          name = entry.value.name.trim().isNotEmpty
+              ? entry.value.name.trim()
+              : entry.key;
+          phoneNumber = entry.value.phoneNumber;
+          profilePhotoUrl = entry.value.profilePhotoUrl;
+          foundInContacts = true;
+          break;
+        }
       }
     }
 
-    // Sender is not in the phone contacts: ask who they are, and
-    // title the chat with their number (like WhatsApp).
-    var isSavedContact = true;
-    String? registeredName;
-    if (name == 'Chat') {
+    // Not a saved contact: title with their name from the push; the
+    // chat screen fills in the rest once it loads.
+    if (!foundInContacts) {
       isSavedContact = false;
-      final found = (await UnknownSenderService.instance
-          .resolve({otherUserId}))[otherUserId];
-      if (found != null) {
-        registeredName =
-            found.name.trim().isNotEmpty ? found.name.trim() : null;
-        name = found.phoneNumber.isNotEmpty
-            ? found.phoneNumber
-            : (registeredName ?? 'Webs user');
-        phoneNumber = found.phoneNumber;
-        profilePhotoUrl = found.profilePhotoUrl;
-      } else {
-        name = 'Webs user';
-      }
+      registeredName =
+          payloadSenderName.trim().isNotEmpty ? payloadSenderName.trim() : null;
+      name = registeredName ?? 'Webs user';
     }
 
     final navigator = websNavigatorKey.currentState;
-    if (navigator == null) return;
+    final cuid = currentUserId;
+    final ouid = otherUserId;
+    if (navigator == null || cuid == null || ouid == null) return;
 
     navigator.push(
       MaterialPageRoute(
         builder: (_) => ChatScreen(
-          currentUserId: currentUserId,
-          userId: otherUserId,
+          currentUserId: cuid,
+          userId: ouid,
           name: name,
           phoneNumber: phoneNumber,
           profilePhotoUrl: profilePhotoUrl,

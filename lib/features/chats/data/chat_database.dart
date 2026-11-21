@@ -27,7 +27,7 @@ class ConversationSummary {
 class ChatDatabase {
   static const String _databaseName = 'webs_chat.db';
 
-  static const int _databaseVersion = 2;
+  static const int _databaseVersion = 3;
 
   static const String _messagesTable = 'messages';
 
@@ -70,6 +70,22 @@ class ChatDatabase {
         if (oldVersion < 2) {
           // Version 2 introduced no new columns.
         }
+        if (oldVersion < 3) {
+          // Image / audio / reply support.
+          const extra = <String>[
+            "ALTER TABLE $_messagesTable ADD COLUMN type TEXT NOT NULL DEFAULT 'text'",
+            'ALTER TABLE $_messagesTable ADD COLUMN media_local_path TEXT',
+            'ALTER TABLE $_messagesTable ADD COLUMN media_token TEXT',
+            'ALTER TABLE $_messagesTable ADD COLUMN media_mime TEXT',
+            'ALTER TABLE $_messagesTable ADD COLUMN audio_duration_ms INTEGER',
+            'ALTER TABLE $_messagesTable ADD COLUMN reply_preview TEXT',
+            'ALTER TABLE $_messagesTable ADD COLUMN reply_sender TEXT',
+            'ALTER TABLE $_messagesTable ADD COLUMN reply_type TEXT',
+          ];
+          for (final sql in extra) {
+            await db.execute(sql);
+          }
+        }
       },
     );
   }
@@ -87,7 +103,15 @@ class ChatDatabase {
         text TEXT NOT NULL,
         created_at TEXT NOT NULL,
         status TEXT NOT NULL,
-        is_mine INTEGER NOT NULL
+        is_mine INTEGER NOT NULL,
+        type TEXT NOT NULL DEFAULT 'text',
+        media_local_path TEXT,
+        media_token TEXT,
+        media_mime TEXT,
+        audio_duration_ms INTEGER,
+        reply_preview TEXT,
+        reply_sender TEXT,
+        reply_type TEXT
       )
     ''');
 
@@ -294,9 +318,18 @@ class ChatDatabase {
       final isNewer = existing == null ||
           message.createdAt.isAfter(existing.lastMessageAt);
 
+      // Media messages show a label in the list instead of blank text.
+      final previewText = message.isImage
+          ? (message.text.trim().isNotEmpty
+              ? '📷 ${message.text.trim()}'
+              : '📷 Photo')
+          : message.isAudio
+              ? '🎤 Voice message'
+              : message.text;
+
       summaries[conversationId] = ConversationSummary(
         lastMessageText: isNewer
-            ? message.text
+            ? previewText
             : existing.lastMessageText,
         lastMessageAt: isNewer
             ? message.createdAt
@@ -333,6 +366,14 @@ class ChatDatabase {
       'created_at': message.createdAt.toIso8601String(),
       'status': message.status.name,
       'is_mine': message.isMine ? 1 : 0,
+      'type': message.type,
+      'media_local_path': message.mediaLocalPath,
+      'media_token': message.mediaToken,
+      'media_mime': message.mediaMime,
+      'audio_duration_ms': message.audioDurationMs,
+      'reply_preview': message.replyPreview,
+      'reply_sender': message.replySender,
+      'reply_type': message.replyType,
     };
   }
 
@@ -352,6 +393,14 @@ class ChatDatabase {
         orElse: () => MessageStatus.failed,
       ),
       isMine: (map['is_mine'] as int) == 1,
+      type: (map['type'] as String?) ?? 'text',
+      mediaLocalPath: map['media_local_path'] as String?,
+      mediaToken: map['media_token'] as String?,
+      mediaMime: map['media_mime'] as String?,
+      audioDurationMs: map['audio_duration_ms'] as int?,
+      replyPreview: map['reply_preview'] as String?,
+      replySender: map['reply_sender'] as String?,
+      replyType: map['reply_type'] as String?,
     );
   }
 }

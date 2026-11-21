@@ -1,15 +1,29 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/errors/api_exception.dart';
 import '../../../core/notifications/active_conversation.dart';
+import '../../../core/notifications/notification_actions.dart';
 import '../models/chat_message.dart';
 import '../services/message_service.dart';
 import 'chat_database.dart';
+import 'chat_media_storage.dart';
 
 class ChatRepository {
   final ChatDatabase _database;
   final MessageService _messageService;
+
+  /// True when a failure is a connection problem (retry later) rather
+  /// than the server rejecting the request (a real failure).
+  bool _isOffline(Object e) {
+    if (e is ApiException) return e.statusCode == null;
+    return e is SocketException || e is TimeoutException;
+  }
   final Uuid _uuid;
 
   ChatRepository({
@@ -51,6 +65,9 @@ class ChatRepository {
     required int recipientId,
     required String conversationId,
     required String text,
+    String? replyPreview,
+    String? replySender,
+    String? replyType,
   }) async {
     final trimmedText = text.trim();
 
@@ -71,6 +88,9 @@ class ChatRepository {
       createdAt: now,
       status: MessageStatus.pending,
       isMine: true,
+      replyPreview: replyPreview,
+      replySender: replySender,
+      replyType: replyType,
     );
 
     await _database.insertMessage(message);
@@ -85,6 +105,9 @@ class ChatRepository {
         recipientId: recipientId,
         clientMessageId: localId,
         message: trimmedText,
+        replyPreview: replyPreview,
+        replySender: replySender,
+        replyType: replyType,
       );
 
       // The server is the authority on when the message
@@ -110,12 +133,139 @@ class ChatRepository {
 
       return message;
     } catch (e) {
-      message = message.copyWith(status: MessageStatus.failed);
-
+      // Offline -> queue (clock) and let the outbox retry. A real
+      // server error -> mark failed (red) instead of retrying forever.
+      final offline = _isOffline(e);
+      message = message.copyWith(
+        status: offline ? MessageStatus.pending : MessageStatus.failed,
+      );
       await _database.updateMessage(message);
+      debugPrint('SEND: ${offline ? "queued (offline)" : "FAILED"} '
+          'localId=$localId error=$e');
+      return message;
+    }
+  }
 
-      debugPrint('SEND: FAILED localId=$localId error=$e');
+  /// Writes into local history any replies that were sent straight
+  /// from a notification (in the background), so the sender's chat
+  /// shows them. The network send already happened; this only records
+  /// them locally.
+  Future<bool> flushNotificationReplies(int currentUserId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = prefs.getStringList(kPendingOutboundKey) ?? <String>[];
+      if (list.isEmpty) return false;
 
+      var added = false;
+      for (final raw in list) {
+        try {
+          final m = jsonDecode(raw) as Map<String, dynamic>;
+          final clientId = m['client_id']?.toString() ?? '';
+          if (clientId.isEmpty) continue;
+          if (await _database.findByLocalId(clientId) != null) continue;
+
+          final createdAt =
+              DateTime.tryParse(m['created_at']?.toString() ?? '') ??
+                  DateTime.now();
+          await _database.insertMessage(ChatMessage(
+            localId: clientId,
+            serverId: null,
+            senderId: currentUserId,
+            recipientId: int.tryParse(m['recipient_id']?.toString() ?? '') ?? 0,
+            conversationId: m['conversation_id']?.toString() ?? '',
+            text: m['text']?.toString() ?? '',
+            createdAt: createdAt,
+            status: MessageStatus.sent,
+            isMine: true,
+          ));
+          added = true;
+        } catch (_) {}
+      }
+      await prefs.remove(kPendingOutboundKey);
+      return added;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Sends an image or voice note. [file] is the picked image or the
+  /// recorded audio file; a persistent local copy is kept on this phone.
+  Future<ChatMessage> createAndSendMediaMessage({
+    required int senderId,
+    required int recipientId,
+    required String conversationId,
+    required String type, // 'image' or 'audio'
+    required File file,
+    String caption = '',
+    int? audioDurationMs,
+    String? replyPreview,
+    String? replySender,
+    String? replyType,
+  }) async {
+    final localId = _uuid.v4();
+    final now = DateTime.now();
+
+    // Keep a lasting local copy (the picked/recorded file may be temporary).
+    final bytes = await file.readAsBytes();
+    final localPath = await ChatMediaStorage.instance.saveBytes(
+      id: localId,
+      bytes: bytes,
+      type: type,
+    );
+
+    var message = ChatMessage(
+      localId: localId,
+      serverId: null,
+      senderId: senderId,
+      recipientId: recipientId,
+      conversationId: conversationId,
+      text: caption.trim(),
+      createdAt: now,
+      status: MessageStatus.pending,
+      isMine: true,
+      type: type,
+      mediaLocalPath: localPath,
+      audioDurationMs: audioDurationMs,
+      replyPreview: replyPreview,
+      replySender: replySender,
+      replyType: replyType,
+    );
+    await _database.insertMessage(message);
+
+    try {
+      final upload = await _messageService.uploadMedia(File(localPath),
+          type == 'image' ? 'image' : 'audio');
+
+      final result = await _messageService.sendMessage(
+        recipientId: recipientId,
+        clientMessageId: localId,
+        message: caption.trim(),
+        type: type,
+        mediaToken: upload.token,
+        mediaMime: upload.mime,
+        audioDurationMs: audioDurationMs,
+        replyPreview: replyPreview,
+        replySender: replySender,
+        replyType: replyType,
+      );
+
+      message = message.copyWith(
+        serverId: result.serverMessageId,
+        status: MessageStatus.sent,
+        mediaToken: upload.token,
+        mediaMime: upload.mime,
+        createdAt: result.createdAt ?? now,
+      );
+      await _database.updateMessage(message);
+      return message;
+    } catch (e) {
+      final offline = _isOffline(e);
+      message = message.copyWith(
+        status: offline ? MessageStatus.pending : MessageStatus.failed,
+      );
+      await _database.updateMessage(message);
+      debugPrint('SEND-MEDIA: ${offline ? "queued (offline)" : "FAILED"} '
+          'localId=$localId error=$e');
       return message;
     }
   }
@@ -186,6 +336,35 @@ class ChatRepository {
         serverMessage.recipientId,
       );
 
+      // For media, download the file BEFORE acknowledging — the
+      // server deletes the media once the message is acknowledged.
+      String? mediaLocalPath;
+      if (serverMessage.type != MessageType.text &&
+          serverMessage.mediaToken != null) {
+        try {
+          final bytes =
+              await _messageService.downloadMedia(serverMessage.mediaToken!);
+          if (bytes != null) {
+            mediaLocalPath = await ChatMediaStorage.instance.saveBytes(
+              id: recipientLocalId,
+              bytes: bytes,
+              type: serverMessage.type,
+              mime: serverMessage.mediaMime,
+            );
+          }
+        } catch (_) {}
+
+        // Download failed: leave it on the server and try again next
+        // poll instead of acknowledging (which would delete it).
+        if (mediaLocalPath == null) {
+          debugPrint(
+            'RECV: media download failed for '
+            'serverId=${serverMessage.serverMessageId}, will retry',
+          );
+          continue;
+        }
+      }
+
       final localMessage = ChatMessage(
         localId: recipientLocalId,
         serverId: serverMessage.serverMessageId,
@@ -196,6 +375,14 @@ class ChatRepository {
         createdAt: serverMessage.createdAt,
         status: MessageStatus.delivered,
         isMine: serverMessage.senderId == currentUserId,
+        type: serverMessage.type,
+        mediaLocalPath: mediaLocalPath,
+        mediaToken: serverMessage.mediaToken,
+        mediaMime: serverMessage.mediaMime,
+        audioDurationMs: serverMessage.audioDurationMs,
+        replyPreview: serverMessage.replyPreview,
+        replySender: serverMessage.replySender,
+        replyType: serverMessage.replyType,
       );
 
       await _database.insertMessage(localMessage);
@@ -361,6 +548,71 @@ class ChatRepository {
       }
     }
     return changed;
+  }
+
+  // ===================================================================
+  // OUTBOX — resend queued (pending) messages when back online
+  // ===================================================================
+
+  /// Tries to send every queued message of [currentUserId] that has not
+  /// reached the server yet. Safe to call repeatedly; a message that is
+  /// still unsendable stays queued.
+  Future<void> sendPendingMessages(int currentUserId) async {
+    final pending = await _database.getPendingMessages();
+    for (final m in pending) {
+      if (!m.isMine) continue;
+      if (m.senderId != currentUserId) continue;
+      if (m.serverId != null) continue; // already accepted
+
+      try {
+        if (m.isText) {
+          final result = await _messageService.sendMessage(
+            recipientId: m.recipientId,
+            clientMessageId: m.localId,
+            message: m.text,
+            replyPreview: m.replyPreview,
+            replySender: m.replySender,
+            replyType: m.replyType,
+          );
+          await _database.updateMessage(m.copyWith(
+            serverId: result.serverMessageId,
+            status: MessageStatus.sent,
+            createdAt: result.createdAt ?? m.createdAt,
+          ));
+        } else {
+          final path = m.mediaLocalPath;
+          if (path == null || !File(path).existsSync()) continue;
+          final upload = await _messageService.uploadMedia(
+              File(path), m.isImage ? 'image' : 'audio');
+          final result = await _messageService.sendMessage(
+            recipientId: m.recipientId,
+            clientMessageId: m.localId,
+            message: m.text,
+            type: m.type,
+            mediaToken: upload.token,
+            mediaMime: upload.mime,
+            audioDurationMs: m.audioDurationMs,
+            replyPreview: m.replyPreview,
+            replySender: m.replySender,
+            replyType: m.replyType,
+          );
+          await _database.updateMessage(m.copyWith(
+            serverId: result.serverMessageId,
+            status: MessageStatus.sent,
+            mediaToken: upload.token,
+            mediaMime: upload.mime,
+            createdAt: result.createdAt ?? m.createdAt,
+          ));
+        }
+      } catch (e) {
+        if (!_isOffline(e)) {
+          // The server rejected it (e.g. endpoint missing): stop the
+          // endless retry and show it as failed so the user can retry.
+          await _database.updateMessage(m.copyWith(status: MessageStatus.failed));
+        }
+        // Offline: leave queued and try again later.
+      }
+    }
   }
 
   // ===================================================================

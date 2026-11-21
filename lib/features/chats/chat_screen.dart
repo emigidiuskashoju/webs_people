@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:firebase_analytics/firebase_analytics.dart'; // <-- ADDED
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:record/record.dart';
 import 'package:flutter_contacts/flutter_contacts.dart'
     show
         Contact,
@@ -22,8 +25,11 @@ import '../map/services/location_request_service.dart';
 import '../presence/models/user_presence.dart';
 import '../presence/presence_heartbeat.dart';
 import '../presence/services/presence_service.dart';
+import 'data/chat_media_storage.dart';
+import 'services/outbox_service.dart';
 import 'data/chat_repository.dart';
 import 'models/chat_message.dart';
+import 'widgets/audio_message_player.dart';
 
 class ChatScreen extends StatefulWidget {
   final int currentUserId;
@@ -71,6 +77,16 @@ class _ChatScreenState extends State<ChatScreen> {
   Timer? _presencePollTimer;
 
   UserPresence? _presence;
+
+  // Reply + media composer state
+  ChatMessage? _replyingTo;
+  final ImagePicker _imagePicker = ImagePicker();
+  final AudioRecorder _recorder = AudioRecorder();
+  bool _isRecording = false;
+  bool _sendingMedia = false;
+  Duration _recordElapsed = Duration.zero;
+  Timer? _recordTimer;
+  String? _recordPath;
 
   // "Save contact" bar
   bool _savedToContacts = false;
@@ -128,6 +144,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // ----------------------------------
 
     ActiveConversation.instance.enter(_conversationId);
+    OutboxService.instance.start(widget.currentUserId);
     // Opening the chat clears its notifications, like WhatsApp.
     unawaited(NotificationService.instance.cancelConversation(_conversationId));
 
@@ -164,6 +181,8 @@ class _ChatScreenState extends State<ChatScreen> {
     _presencePollTimer?.cancel();
 
     _messageController.removeListener(_onComposerChanged);
+    _recordTimer?.cancel();
+    _recorder.dispose();
     _messageController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -239,6 +258,7 @@ class _ChatScreenState extends State<ChatScreen> {
       await _repository.receivePendingMessages(
         currentUserId: widget.currentUserId,
       );
+      await _repository.flushNotificationReplies(widget.currentUserId);
       final messages = await _repository.getConversation(
         _conversationId,
         currentUserId: widget.currentUserId,
@@ -318,11 +338,173 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (_) {}
   }
 
+  // ============================================================
+  // REPLY + MEDIA
+  // ============================================================
+
+  ({String preview, String sender, String type})? _replyFields() {
+    final r = _replyingTo;
+    if (r == null) return null;
+    return (
+      preview: _previewFor(r),
+      sender: r.isMine ? 'You' : widget.name,
+      type: r.type,
+    );
+  }
+
+  /// Short preview text for a replied-to or quoted message.
+  String _previewFor(ChatMessage m) {
+    if (m.isImage) return m.text.trim().isNotEmpty ? m.text.trim() : 'Photo';
+    if (m.isAudio) return 'Voice message';
+    return m.text.trim();
+  }
+
+  void _startReply(ChatMessage message) {
+    setState(() => _replyingTo = message);
+  }
+
+  Future<void> _reloadMessages() async {
+    if (!mounted) return;
+    final messages = await _repository.getConversation(
+      _conversationId,
+      currentUserId: widget.currentUserId,
+    );
+    if (!mounted) return;
+    setState(() => _messages = messages);
+    _scrollToBottom();
+  }
+
+  Future<void> _pickAndSendImage() async {
+    if (_sendingMedia) return;
+    try {
+      // Allow picking several photos at once.
+      final picked = await _imagePicker.pickMultiImage(
+        imageQuality: 70,
+        maxWidth: 1600,
+        maxHeight: 1600,
+      );
+      if (picked.isEmpty) return;
+
+      // Only the first photo carries the reply quote.
+      final reply = _replyFields();
+      setState(() {
+        _sendingMedia = true;
+        _replyingTo = null;
+      });
+
+      for (var i = 0; i < picked.length; i++) {
+        await _repository.createAndSendMediaMessage(
+          senderId: widget.currentUserId,
+          recipientId: widget.userId,
+          conversationId: _conversationId,
+          type: MessageType.image,
+          file: File(picked[i].path),
+          replyPreview: i == 0 ? reply?.preview : null,
+          replySender: i == 0 ? reply?.sender : null,
+          replyType: i == 0 ? reply?.type : null,
+        );
+        await _reloadMessages();
+      }
+      Future.delayed(const Duration(milliseconds: 800), () {
+        if (mounted) _refreshMessageStatuses();
+      });
+    } catch (_) {
+      if (mounted) _snack('Could not send the photo(s).');
+    } finally {
+      if (mounted) setState(() => _sendingMedia = false);
+    }
+  }
+
+  Future<void> _startRecording() async {
+    if (_isRecording) return;
+    try {
+      if (!await _recorder.hasPermission()) {
+        _snack('Allow microphone access to record a voice message.');
+        return;
+      }
+      final id = DateTime.now().microsecondsSinceEpoch.toString();
+      final path = await ChatMediaStorage.instance.newAudioPath('rec_$id');
+      await _recorder.start(
+        const RecordConfig(encoder: AudioEncoder.aacLc, numChannels: 1),
+        path: path,
+      );
+      _recordPath = path;
+      _recordElapsed = Duration.zero;
+      _recordTimer?.cancel();
+      _recordTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted) return;
+        setState(() => _recordElapsed += const Duration(seconds: 1));
+      });
+      setState(() => _isRecording = true);
+    } catch (_) {
+      _snack('Could not start recording.');
+    }
+  }
+
+  Future<void> _cancelRecording() async {
+    _recordTimer?.cancel();
+    try {
+      await _recorder.stop();
+    } catch (_) {}
+    await ChatMediaStorage.instance.deleteIfExists(_recordPath);
+    _recordPath = null;
+    if (mounted) setState(() => _isRecording = false);
+  }
+
+  Future<void> _stopAndSendRecording() async {
+    _recordTimer?.cancel();
+    final durationMs = _recordElapsed.inMilliseconds;
+    String? path;
+    try {
+      path = await _recorder.stop();
+    } catch (_) {}
+    path ??= _recordPath;
+    if (mounted) setState(() => _isRecording = false);
+
+    if (path == null || !File(path).existsSync() || durationMs < 800) {
+      await ChatMediaStorage.instance.deleteIfExists(path);
+      if (durationMs < 800 && mounted) _snack('Hold longer to record.');
+      return;
+    }
+
+    final reply = _replyFields();
+    setState(() {
+      _sendingMedia = true;
+      _replyingTo = null;
+    });
+    try {
+      await _repository.createAndSendMediaMessage(
+        senderId: widget.currentUserId,
+        recipientId: widget.userId,
+        conversationId: _conversationId,
+        type: MessageType.audio,
+        file: File(path),
+        audioDurationMs: durationMs,
+        replyPreview: reply?.preview,
+        replySender: reply?.sender,
+        replyType: reply?.type,
+      );
+      // The repository kept its own copy; drop the temp recording.
+      await ChatMediaStorage.instance.deleteIfExists(path);
+      await _reloadMessages();
+      Future.delayed(const Duration(milliseconds: 800), () {
+        if (mounted) _refreshMessageStatuses();
+      });
+    } catch (_) {
+      if (mounted) _snack('Could not send the voice message.');
+    } finally {
+      if (mounted) setState(() => _sendingMedia = false);
+    }
+  }
+
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
 
     _messageController.clear();
+
+    final reply = _replyFields();
+    setState(() => _replyingTo = null);
 
     // Clear the typing signal immediately after sending.
     _typingStopDebounce?.cancel();
@@ -335,6 +517,9 @@ class _ChatScreenState extends State<ChatScreen> {
         recipientId: widget.userId,
         conversationId: _conversationId,
         text: text,
+        replyPreview: reply?.preview,
+        replySender: reply?.sender,
+        replyType: reply?.type,
       );
 
       await Future.delayed(const Duration(milliseconds: 50));
@@ -402,7 +587,7 @@ class _ChatScreenState extends State<ChatScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
                 child: Text(
-                  message.text,
+                  _previewFor(message),
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -414,9 +599,27 @@ class _ChatScreenState extends State<ChatScreen> {
               const Divider(height: 1),
               ListTile(
                 leading: const Icon(
-                  Icons.copy_outlined,
+                  Icons.reply,
                   color: WebsColors.primaryGreen,
                 ),
+                title: Text(
+                  'Reply',
+                  style: TextStyle(
+                    color: WebsColors.textDark(sheetContext),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _startReply(message);
+                },
+              ),
+              if (message.isText)
+                ListTile(
+                  leading: const Icon(
+                    Icons.copy_outlined,
+                    color: WebsColors.primaryGreen,
+                  ),
                 title: Text(
                   'Copy',
                   style: TextStyle(
@@ -776,6 +979,119 @@ class _ChatScreenState extends State<ChatScreen> {
   // Message widgets
   // ===================================================================
 
+  Widget _buildReplyHeader(ChatMessage message, Color textColor) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(8, 5, 8, 5),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(8),
+        border: const Border(
+          left: BorderSide(color: WebsColors.primaryGreen, width: 3),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            message.replySender ?? '',
+            style: const TextStyle(
+                color: WebsColors.primaryGreen,
+                fontWeight: FontWeight.bold,
+                fontSize: 12),
+          ),
+          const SizedBox(height: 1),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (message.replyType == MessageType.image) ...[
+                Icon(Icons.photo, size: 12, color: textColor),
+                const SizedBox(width: 3),
+              ] else if (message.replyType == MessageType.audio) ...[
+                Icon(Icons.mic, size: 12, color: textColor),
+                const SizedBox(width: 3),
+              ],
+              Flexible(
+                child: Text(
+                  message.replyPreview ?? '',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 12, color: textColor.withValues(alpha: 0.8)),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBubbleContent(ChatMessage message, Color textColor) {
+    if (message.isImage) {
+      final path = message.mediaLocalPath;
+      final hasFile = path != null && File(path).existsSync();
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: hasFile
+                ? GestureDetector(
+                    onTap: () => _openImage(path),
+                    child: Image.file(
+                      File(path),
+                      width: 220,
+                      fit: BoxFit.cover,
+                    ),
+                  )
+                : Container(
+                    width: 220,
+                    height: 160,
+                    color: Colors.black.withValues(alpha: 0.08),
+                    alignment: Alignment.center,
+                    child: const Icon(Icons.photo, size: 40, color: Colors.grey),
+                  ),
+          ),
+          if (message.text.trim().isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(message.text,
+                style: TextStyle(color: textColor, fontSize: 16)),
+          ],
+        ],
+      );
+    }
+
+    if (message.isAudio) {
+      final path = message.mediaLocalPath;
+      final hasFile = path != null && File(path).existsSync();
+      if (!hasFile) {
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.mic, size: 18, color: textColor),
+            const SizedBox(width: 6),
+            Text('Voice message',
+                style: TextStyle(color: textColor, fontSize: 15)),
+          ],
+        );
+      }
+      return AudioMessagePlayer(
+        filePath: path,
+        durationMs: message.audioDurationMs,
+        accent: WebsColors.primaryGreen,
+        textColor: textColor,
+      );
+    }
+
+    return Text(
+      message.text,
+      style: TextStyle(color: textColor, fontSize: 16),
+    );
+  }
+
   Widget _buildStatusIcon(
     MessageStatus status, {
     required Color color,
@@ -843,10 +1159,8 @@ class _ChatScreenState extends State<ChatScreen> {
             crossAxisAlignment:
                 isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
             children: [
-              Text(
-                message.text,
-                style: TextStyle(color: textColor, fontSize: 16),
-              ),
+              if (message.hasReply) _buildReplyHeader(message, textColor),
+              _buildBubbleContent(message, textColor),
               const SizedBox(height: 4),
               Row(
                 mainAxisSize: MainAxisSize.min,
@@ -953,7 +1267,11 @@ class _ChatScreenState extends State<ChatScreen> {
             final message = item.message!;
 
             return RepaintBoundary(
-              child: _buildMessageBubble(message),
+              child: _SwipeToReply(
+                itemKey: message.localId,
+                onReply: () => _startReply(message),
+                child: _buildMessageBubble(message),
+              ),
             );
 
           case _ChatTimelineKind.location:
@@ -972,71 +1290,191 @@ class _ChatScreenState extends State<ChatScreen> {
   // ===================================================================
 
   Widget _buildComposer() {
+    if (_isRecording) return _buildRecordingBar();
+
     return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            IconButton(
-              tooltip: 'Open map',
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => MapScreen(
-                      currentUserId: widget.currentUserId,
-                      userId: widget.userId,
-                      name: widget.name,
-                      otherUserPhotoUrl: widget.profilePhotoUrl,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_replyingTo != null) _buildReplyPreviewBar(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                IconButton(
+                  tooltip: 'Open map',
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => MapScreen(
+                          currentUserId: widget.currentUserId,
+                          userId: widget.userId,
+                          name: widget.name,
+                          otherUserPhotoUrl: widget.profilePhotoUrl,
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.map_outlined,
+                      color: WebsColors.primaryGreen),
+                ),
+                IconButton(
+                  tooltip: 'Send photo',
+                  onPressed: _sendingMedia ? null : _pickAndSendImage,
+                  icon: const Icon(Icons.image_outlined,
+                      color: WebsColors.primaryGreen),
+                ),
+                Expanded(
+                  child: TextField(
+                    controller: _messageController,
+                    minLines: 1,
+                    maxLines: 5,
+                    textInputAction: TextInputAction.newline,
+                    style: TextStyle(color: WebsColors.textDark(context)),
+                    decoration: InputDecoration(
+                      hintText: 'Message...',
+                      hintStyle:
+                          TextStyle(color: WebsColors.textLight(context)),
+                      filled: true,
+                      fillColor: WebsColors.softGreen(context),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide.none,
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: const BorderSide(
+                            color: WebsColors.primaryGreen, width: 2),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 18, vertical: 12),
                     ),
-                  ),
-                );
-              },
-              icon: const Icon(
-                Icons.map_outlined,
-                color: WebsColors.primaryGreen,
-              ),
-            ),
-            Expanded(
-              child: TextField(
-                controller: _messageController,
-                minLines: 1,
-                maxLines: 5,
-                textInputAction: TextInputAction.newline,
-                style: TextStyle(color: WebsColors.textDark(context)),
-                decoration: InputDecoration(
-                  hintText: 'Message...',
-                  hintStyle: TextStyle(color: WebsColors.textLight(context)),
-                  filled: true,
-                  fillColor: WebsColors.softGreen(context),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide.none,
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: const BorderSide(
-                      color: WebsColors.primaryGreen,
-                      width: 2,
-                    ),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 12,
+                    onSubmitted: (_) => _sendMessage(),
                   ),
                 ),
-                onSubmitted: (_) => _sendMessage(),
-              ),
+                const SizedBox(width: 4),
+                IconButton(
+                  tooltip: 'Record voice message',
+                  onPressed: _sendingMedia ? null : _startRecording,
+                  icon: const Icon(Icons.mic, color: WebsColors.primaryGreen),
+                ),
+                IconButton(
+                  tooltip: 'Send',
+                  onPressed: _sendMessage,
+                  icon: const Icon(Icons.send, color: WebsColors.primaryGreen),
+                ),
+              ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRecordingBar() {
+    final m = _recordElapsed.inMinutes.remainder(60).toString();
+    final sec =
+        _recordElapsed.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+        child: Row(
+          children: [
+            const Icon(Icons.fiber_manual_record, color: Colors.redAccent, size: 16),
             const SizedBox(width: 8),
+            Text('Recording  $m:$sec',
+                style: TextStyle(color: WebsColors.textDark(context))),
+            const Spacer(),
+            TextButton(
+              onPressed: _cancelRecording,
+              child: const Text('Cancel',
+                  style: TextStyle(color: Colors.redAccent)),
+            ),
             IconButton(
-              onPressed: _sendMessage,
-              icon: const Icon(
-                Icons.send,
-                color: WebsColors.primaryGreen,
-              ),
+              tooltip: 'Send voice message',
+              onPressed: _stopAndSendRecording,
+              icon: const Icon(Icons.send, color: WebsColors.primaryGreen),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildReplyPreviewBar() {
+    final r = _replyingTo!;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+      padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
+      decoration: BoxDecoration(
+        color: WebsColors.softGreen(context),
+        borderRadius: BorderRadius.circular(10),
+        border: const Border(
+          left: BorderSide(color: WebsColors.primaryGreen, width: 4),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  r.isMine ? 'You' : widget.name,
+                  style: const TextStyle(
+                      color: WebsColors.primaryGreen,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12),
+                ),
+                const SizedBox(height: 2),
+                Row(
+                  children: [
+                    if (r.isImage) ...[
+                      const Icon(Icons.photo, size: 13, color: Colors.grey),
+                      const SizedBox(width: 4),
+                    ] else if (r.isAudio) ...[
+                      const Icon(Icons.mic, size: 13, color: Colors.grey),
+                      const SizedBox(width: 4),
+                    ],
+                    Expanded(
+                      child: Text(
+                        _previewFor(r),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: WebsColors.textLight(context), fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: Icon(Icons.close, color: WebsColors.textLight(context)),
+            onPressed: () => setState(() => _replyingTo = null),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openImage(String path) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            iconTheme: const IconThemeData(color: Colors.white),
+          ),
+          body: Center(
+            child: InteractiveViewer(
+              child: Image.file(File(path)),
+            ),
+          ),
         ),
       ),
     );
@@ -1292,5 +1730,44 @@ class _ChatTimelineItem {
       case _ChatTimelineKind.location:
         return location?.createdAt;
     }
+  }
+}
+
+// ===================================================================
+// Swipe-to-reply (WhatsApp style): slide a message sideways to reply.
+// ===================================================================
+
+class _SwipeToReply extends StatelessWidget {
+  final String itemKey;
+  final Widget child;
+  final VoidCallback onReply;
+
+  const _SwipeToReply({
+    required this.itemKey,
+    required this.child,
+    required this.onReply,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Dismissible(
+      key: ValueKey('swipe_$itemKey'),
+      direction: DismissDirection.startToEnd,
+      dismissThresholds: const {DismissDirection.startToEnd: 0.28},
+      movementDuration: const Duration(milliseconds: 180),
+      confirmDismiss: (_) async {
+        HapticFeedback.selectionClick();
+        onReply();
+        return false; // never actually dismiss — just trigger reply
+      },
+      background: const Padding(
+        padding: EdgeInsets.only(left: 24),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Icon(Icons.reply, color: WebsColors.primaryGreen),
+        ),
+      ),
+      child: child,
+    );
   }
 }

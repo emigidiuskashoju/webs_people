@@ -221,6 +221,12 @@ class ApiEndpoints {
   static const String messageStatuses =
       '/messages/statuses';
 
+  static const String messageMediaUpload =
+      '/messages/media';
+
+  static String messageMediaDownload(String token) =>
+      '/messages/media/$token';
+
   static String acknowledgeReadReceipt(
     int receiptId,
   ) =>

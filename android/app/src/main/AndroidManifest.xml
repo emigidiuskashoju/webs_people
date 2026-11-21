@@ -17,9 +17,10 @@ xmlns:tools="http://schemas.android.com/tools">
     <!-- EXISTING PERMISSIONS -->
     <!-- ========================================================= -->
 
-    <!-- CAMERA, RECORD_AUDIO, CHANGE_NETWORK_STATE and
-         MODIFY_AUDIO_SETTINGS were removed with the calling feature.
-         Photos are picked from the gallery, which needs none of them. -->
+    <!-- CAMERA, CHANGE_NETWORK_STATE and MODIFY_AUDIO_SETTINGS were
+         removed with the calling feature. RECORD_AUDIO is needed again
+         for voice messages in chats. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.WRITE_CONTACTS" />
@@ -114,6 +115,15 @@ xmlns:tools="http://schemas.android.com/tools">
         <meta-data
             android:name="android.app.full_screen_intent_use_cases"
             android:value="incoming_call" />
+
+        <!-- FCM: use a proper monochrome status-bar icon (not the
+             launcher icon, which shows as a white box) and a brand tint. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_webs" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/webs_notification" />
     </application>
 
     <!-- Required to query activities that can process text -->

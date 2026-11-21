@@ -64,7 +64,10 @@ class _CachedAvatarState extends State<CachedAvatar> {
 
     final file = await ProfilePhotoCache.instance.get(url);
 
-    if (!mounted) return;
+    // Guard against a recycled row: if this widget now shows a
+    // DIFFERENT person's photo, drop this (stale) result so we never
+    // paint one contact's photo onto another.
+    if (!mounted || widget.photoUrl != url) return;
 
     setState(() {
       _cachedFile = file;
@@ -75,7 +78,7 @@ class _CachedAvatarState extends State<CachedAvatar> {
     if (file == null) {
       final downloaded =
           await ProfilePhotoCache.instance.download(url);
-      if (!mounted) return;
+      if (!mounted || widget.photoUrl != url) return;
       if (downloaded != null) {
         setState(() => _cachedFile = downloaded);
       }

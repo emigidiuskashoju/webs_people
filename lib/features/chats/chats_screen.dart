@@ -26,6 +26,7 @@ import 'models/phone_contact.dart';
 import 'models/preloaded_chats_data.dart';
 import 'services/contact_match_service.dart';
 import 'services/contact_preloader.dart';
+import 'services/outbox_service.dart';
 import 'services/phone_contacts_service.dart';
 import 'services/unknown_sender_service.dart';
 
@@ -318,8 +319,15 @@ class _ChatsScreenState extends State<ChatsScreen> with WidgetsBindingObserver {
     final currentUserId = _currentUserId;
     if (currentUserId == null) return;
 
+    // Keep the offline outbox running for this user.
+    OutboxService.instance.start(currentUserId);
+
     try {
       await _chatRepository.receivePendingMessages(currentUserId: currentUserId);
+    } catch (_) {}
+
+    try {
+      await _chatRepository.flushNotificationReplies(currentUserId);
     } catch (_) {}
 
     await _refreshPendingLocationRequests(silent: true);

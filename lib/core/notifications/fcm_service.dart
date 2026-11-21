@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:flutter/foundation.dart';
 
 import '../network/api_client.dart';
@@ -34,6 +35,25 @@ Future<void> _firebaseBackgroundHandler(
     // is ready when the user taps.
     final notificationService = NotificationService.instance;
     await notificationService.initialize();
+    return;
+  }
+
+  if (type == 'new_message') {
+    final conversationId = data['conversation_id'] as String?;
+    if (conversationId == null || conversationId.isEmpty) return;
+    final senderName = data['sender_name'] as String? ?? 'New message';
+    final body = data['body'] as String? ?? '';
+
+    final service = NotificationService.instance;
+    await service.initialize();
+    await service.showMessageNotification(
+      senderName: senderName,
+      text: body,
+      conversationId: conversationId,
+      senderId: int.tryParse(data['sender_id']?.toString() ?? ''),
+      serverMessageId:
+          int.tryParse(data['server_message_id']?.toString() ?? ''),
+    );
   }
 }
 
@@ -128,12 +148,19 @@ class FcmService {
 
       final platform = Platform.isAndroid ? 'android' : 'ios';
 
+      int? appBuild;
+      try {
+        final info = await PackageInfo.fromPlatform();
+        appBuild = int.tryParse(info.buildNumber);
+      } catch (_) {}
+
       await _apiClient.post(
         ApiEndpoints.fcmToken,
         token: authToken,
         body: {
           'token': token,
           'platform': platform,
+          if (appBuild != null) 'app_build': appBuild,
         },
       );
 
@@ -216,6 +243,9 @@ class FcmService {
       senderName: senderName,
       text: body,
       conversationId: conversationId,
+      senderId: int.tryParse(data['sender_id']?.toString() ?? ''),
+      serverMessageId:
+          int.tryParse(data['server_message_id']?.toString() ?? ''),
     );
 
     debugPrint('FCM: showed foreground notification');
@@ -242,7 +272,15 @@ class FcmService {
       return;
     }
 
-    _messageTapController.add(conversationId);
+    // Carry sender info so the chat opens instantly without a lookup.
+    final payload = <String>[
+      conversationId,
+      data['sender_id']?.toString() ?? '0',
+      data['sender_name']?.toString() ?? '',
+      data['server_message_id']?.toString() ?? '0',
+    ].join('\u001F');
+
+    _messageTapController.add(payload);
 
     debugPrint(
       'FCM: notification tapped, '
