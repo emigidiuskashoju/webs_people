@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../core/notifications/notification_tap_gate.dart';
 import '../../core/theme/webs_colors.dart';
-import '../auth/screens/login_screen.dart';
+import '../bestwinger/bw_links.dart';
+import '../bestwinger/bw_track_screen.dart';
 import '../chats/chats_screen.dart';
 import '../chats/models/preloaded_chats_data.dart';
 import '../settings/settings_screen.dart';
@@ -22,7 +23,6 @@ class MainNavigationScreen extends StatefulWidget {
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _currentIndex = 0;
   late final List<Widget> _screens;
-  static const int _securityTabIndex = 2;
 
   @override
   void initState() {
@@ -30,32 +30,28 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     _screens = [
       ChatsScreen(preloaded: widget.preloadedChats),
       const SettingsScreen(),
+      // Replaces the old Security tab: meet the buyer / seller of a
+      // BestWinger delivery on the map (works with the website too).
+      const BwTrackScreen(),
     ];
     // Now a tapped notification can open its chat on top of this
     // screen (including one tapped while the app was starting).
     NotificationTapGate.instance.markReadyAfterFirstFrame();
+    // Same for "Track in Webs" links from the BestWinger website.
+    BwLinks.instance.markReadyAfterFirstFrame();
   }
 
   @override
   void dispose() {
     NotificationTapGate.instance.markNotReady();
+    BwLinks.instance.markNotReady();
     super.dispose();
   }
 
   void _onNavigationItemTapped(int index) {
-    if (index == _securityTabIndex) {
-      _openSecurityLogin();
-      return;
-    }
     setState(() {
       _currentIndex = index;
     });
-  }
-
-  void _openSecurityLogin() {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-    );
   }
 
   @override
@@ -82,9 +78,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             label: 'Settings',
           ),
           NavigationDestination(
-            icon: Icon(Icons.security_outlined),
-            selectedIcon: Icon(Icons.security),
-            label: 'Security',
+            icon: Icon(Icons.local_shipping_outlined),
+            selectedIcon: Icon(Icons.local_shipping),
+            label: 'Track',
           ),
         ],
       ),

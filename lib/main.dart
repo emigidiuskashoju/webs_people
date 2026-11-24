@@ -14,6 +14,7 @@ import 'core/notifications/notification_service.dart';
 import 'core/notifications/notification_tap_gate.dart';
 import 'core/storage/auth_storage.dart';
 import 'features/auth/screens/register_screen.dart';
+import 'features/bestwinger/bw_links.dart';
 import 'features/chats/chat_screen.dart';
 import 'features/chats/models/preloaded_chats_data.dart';
 import 'features/chats/services/contact_preloader.dart';
@@ -125,6 +126,8 @@ class _WebsAppState extends State<WebsApp> {
     _loadToken();
     _listenForNotificationTaps();
     _listenForLocationTaps();
+    // BestWinger "Track in Webs" links (opened once the main screen is up)
+    BwLinks.instance.start(websNavigatorKey);
   }
 
   @override

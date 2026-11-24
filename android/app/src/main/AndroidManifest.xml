@@ -73,6 +73,11 @@ xmlns:tools="http://schemas.android.com/tools">
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme" />
 
+            <!-- Links are handled by the app_links package (BwLinks), not by Flutter's router -->
+            <meta-data
+                android:name="flutter_deeplinking_enabled"
+                android:value="false" />
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -87,6 +92,14 @@ xmlns:tools="http://schemas.android.com/tools">
                 <data android:scheme="https" />
                 <data android:host="webzapp.org" />
                 <data android:pathPrefix="/p/" />
+            </intent-filter>
+
+            <!-- BestWinger: "Track in Webs" buttons on bestwinger.webzapp.org open webs://bw/... -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="webs" android:host="bw" />
             </intent-filter>
         </activity>
 
@@ -131,6 +144,15 @@ xmlns:tools="http://schemas.android.com/tools">
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT" />
             <data android:mimeType="text/plain" />
+        </intent>
+        <!-- Track screen: open BestWinger / Google Maps in the browser, call the buyer -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+            <data android:scheme="tel" />
         </intent>
     </queries>
 </manifest>
