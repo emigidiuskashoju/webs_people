@@ -3,11 +3,13 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
-/// The BestWinger website. It is the single source of truth for orders and
+/// The Shoopicky website. It is the single source of truth for orders and
 /// delivery positions, so a buyer on the website and a seller in the Webs app
 /// (or the other way round) always see the same map.
-const String kBestWingerUrl = 'https://bestwinger.webzapp.org';
-const String _bestWingerHost = 'bestwinger.webzapp.org';
+const String kShoopickyUrl = 'https://shoopicky.webzapp.org';
+
+/// Secure seller links may come from the new address or from older emails.
+const Set<String> _bestWingerHosts = {'shoopicky.webzapp.org', 'bestwinger.webzapp.org'};
 
 /// A place on the delivery map: the shop, the buyer or the seller on the way.
 class BwPlace {
@@ -51,7 +53,7 @@ class BwPlace {
       );
 }
 
-/// One BestWinger order as the website shows it.
+/// One Shoopicky order as the website shows it.
 class BwOrder {
   final String code;
   final String product;
@@ -120,14 +122,14 @@ class BwApi {
 
   /// Buyer: look an order up by its tracking code (BW-XXXXXX).
   static Future<BwOrder> byCode(String code) async {
-    final uri = Uri.parse('$kBestWingerUrl/track').replace(queryParameters: {'code': normalizeCode(code)});
+    final uri = Uri.parse('$kShoopickyUrl/track').replace(queryParameters: {'code': normalizeCode(code)});
     final res = await _send(() => http.get(uri, headers: _headers));
     final order = (jsonDecode(res.body) as Map<String, dynamic>)['order'];
     if (order is! Map<String, dynamic>) throw const BwApiException('No order found with that code.');
     return BwOrder.fromJson(order);
   }
 
-  /// Seller / admin: the secure link from the BestWinger email.
+  /// Seller / admin: the secure link from the Shoopicky email.
   static Future<BwOrder> bySellerLink(String link) async {
     final res = await _send(() => http.get(Uri.parse(link), headers: _headers));
     final body = jsonDecode(res.body) as Map<String, dynamic>;
@@ -137,7 +139,7 @@ class BwApi {
   /// Buyer's live location (by order code).
   static Future<void> sendBuyerLocation(String code, LatLng p) async {
     await _send(() => http.post(
-          Uri.parse('$kBestWingerUrl/track/location'),
+          Uri.parse('$kShoopickyUrl/track/location'),
           headers: {..._headers, 'Content-Type': 'application/json'},
           body: jsonEncode({'code': normalizeCode(code), 'lat': p.latitude, 'lng': p.longitude}),
         ));
@@ -161,41 +163,41 @@ class BwApi {
   /// "bw-3flkne " -> "BW-3FLKNE"
   static String normalizeCode(String code) => code.trim().toUpperCase();
 
-  /// Only secure order links from the BestWinger website are accepted.
+  /// Only secure order links from the Shoopicky website are accepted.
   static bool isSellerLink(String link) {
     final uri = Uri.tryParse(link.trim());
     return uri != null &&
         uri.scheme == 'https' &&
-        uri.host == _bestWingerHost &&
+        _bestWingerHosts.contains(uri.host) &&
         RegExp(r'^/orders/\d+/respond$').hasMatch(uri.path) &&
         uri.queryParameters.containsKey('signature');
   }
 
   /// The same order on the website.
   static String websiteTrackUrl(String code) =>
-      Uri.parse('$kBestWingerUrl/track').replace(queryParameters: {'code': normalizeCode(code), 'map': '1'}).toString();
+      Uri.parse('$kShoopickyUrl/track').replace(queryParameters: {'code': normalizeCode(code), 'map': '1'}).toString();
 
   static Future<http.Response> _send(Future<http.Response> Function() call) async {
     http.Response res;
     try {
       res = await call().timeout(_timeout);
     } catch (_) {
-      throw const BwApiException('Could not reach BestWinger. Check your internet and try again.');
+      throw const BwApiException('Could not reach Shoopicky. Check your internet and try again.');
     }
     if (res.statusCode >= 200 && res.statusCode < 300) return res;
     switch (res.statusCode) {
       case 404:
         throw const BwApiException('No order found with that code.');
       case 403:
-        throw const BwApiException('This link has expired. Open the latest BestWinger email again.');
+        throw const BwApiException('This link has expired. Open the latest Shoopicky email again.');
       case 409:
         throw const BwApiException('This order is no longer being delivered.');
       case 422:
-        throw const BwApiException('BestWinger could not accept that. Please try again.');
+        throw const BwApiException('Shoopicky could not accept that. Please try again.');
       case 429:
         throw const BwApiException('Too many tries — wait a minute and try again.');
       default:
-        throw BwApiException('BestWinger is not available right now (${res.statusCode}).');
+        throw BwApiException('Shoopicky is not available right now (${res.statusCode}).');
     }
   }
 }

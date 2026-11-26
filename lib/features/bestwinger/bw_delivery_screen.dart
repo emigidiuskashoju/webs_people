@@ -17,16 +17,16 @@ import '../map/widgets/route_flow_dots.dart';
 import 'bw_api.dart';
 import 'bw_saved_deliveries.dart';
 
-/// One BestWinger delivery on the Webs map.
+/// One Shoopicky delivery on the Webs map.
 ///
 /// The buyer (order code) and the seller (secure link from the email) see the
-/// same order and positions as on the BestWinger website, so one person can
+/// same order and positions as on the Shoopicky website, so one person can
 /// use the website and the other the Webs app.
 class BwDeliveryScreen extends StatefulWidget {
-  /// Buyer: the tracking code, e.g. BW-7Q3K9P.
+  /// Buyer: the tracking code, e.g. SP-7Q3K9P.
   final String? code;
 
-  /// Seller / admin: the secure order link from the BestWinger email.
+  /// Seller / admin: the secure order link from the Shoopicky email.
   final String? link;
 
   const BwDeliveryScreen.buyer({super.key, required String this.code}) : link = null;
@@ -39,7 +39,7 @@ class BwDeliveryScreen extends StatefulWidget {
 }
 
 class _BwDeliveryScreenState extends State<BwDeliveryScreen> {
-  // Same pin colours as the Webs map and the BestWinger website
+  // Same pin colours as the Webs map and the Shoopicky website
   static const Color _shopRing = Color(0xFF25D366);
   static const Color _shopFill = Color(0xFFE8F5E9);
   static const Color _buyerRing = Color(0xFFF57C00);
@@ -580,7 +580,7 @@ class _BwDeliveryScreenState extends State<BwDeliveryScreen> {
               TextButton.icon(
                 onPressed: () => _open(widget.isSeller ? widget.link! : BwApi.websiteTrackUrl(order.code)),
                 icon: const Icon(Icons.open_in_new, size: 18),
-                label: const Text('Open on the BestWinger website'),
+                label: const Text('Open on the Shoopicky website'),
               ),
             ],
           ),
@@ -654,13 +654,13 @@ class _BwDeliveryScreenState extends State<BwDeliveryScreen> {
     switch (order.status) {
       case 'unverified':
         return [
-          const Text('Confirm your email on BestWinger to send this order to the seller.'),
-          _bigButton('Enter my code on BestWinger', _orange, () => _open('$kBestWingerUrl/orders/${order.code}/verify'), icon: Icons.mark_email_read_outlined),
+          const Text('Confirm your email on Shoopicky to send this order to the seller.'),
+          _bigButton('Enter my code on Shoopicky', _orange, () => _open('$kShoopickyUrl/orders/${order.code}/verify'), icon: Icons.mark_email_read_outlined),
         ];
       case 'pending':
         return [const Text('Waiting for the seller to accept your order. You will get an email.')];
       case 'delivered':
-        return [const Text('🎉 Delivered. Thank you for shopping on BestWinger!')];
+        return [const Text('🎉 Delivered. Thank you for shopping on Shoopicky!')];
       case 'cancelled':
         return [const Text('This order was cancelled.')];
     }

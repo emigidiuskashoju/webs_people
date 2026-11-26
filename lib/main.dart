@@ -126,7 +126,7 @@ class _WebsAppState extends State<WebsApp> {
     _loadToken();
     _listenForNotificationTaps();
     _listenForLocationTaps();
-    // BestWinger "Track in Webs" links (opened once the main screen is up)
+    // Shoopicky "Track in Webs" links (opened once the main screen is up)
     BwLinks.instance.start(websNavigatorKey);
   }
 

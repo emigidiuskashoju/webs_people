@@ -6,9 +6,9 @@ import 'package:flutter/material.dart';
 import 'bw_api.dart';
 import 'bw_delivery_screen.dart';
 
-/// Opens a BestWinger delivery when Webs is started from a link.
+/// Opens a Shoopicky delivery when Webs is started from a link.
 ///
-/// The BestWinger website's "Track in Webs" buttons open:
+/// The Shoopicky website's "Track in Webs" buttons open:
 ///   `webs://bw/track?code=BW-XXXXXX`  (buyer)
 ///   `webs://bw/deliver?link=SECURE_LINK`  (seller / admin)
 /// https://webzapp.org/p/bw/... works the same way.
@@ -57,7 +57,7 @@ class BwLinks {
     navigator.push(MaterialPageRoute(builder: (_) => screen));
   }
 
-  /// The delivery screen for a link, or null when the link is not a BestWinger one.
+  /// The delivery screen for a link, or null when the link is not a Shoopicky one.
   static Widget? screenFor(Uri uri) {
     final List<String> parts;
     if (uri.scheme == 'webs' && uri.host == 'bw') {
@@ -72,7 +72,7 @@ class BwLinks {
 
     if (action == 'track') {
       final code = BwApi.normalizeCode(uri.queryParameters['code'] ?? '');
-      return RegExp(r'^BW-[A-Z0-9]{6}$').hasMatch(code) ? BwDeliveryScreen.buyer(code: code) : null;
+      return RegExp(r'^[A-Z]{2}-[A-Z0-9]{6}$').hasMatch(code) ? BwDeliveryScreen.buyer(code: code) : null;
     }
     if (action == 'deliver') {
       final link = uri.queryParameters['link'] ?? '';

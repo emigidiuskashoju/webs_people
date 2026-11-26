@@ -31,13 +31,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       ChatsScreen(preloaded: widget.preloadedChats),
       const SettingsScreen(),
       // Replaces the old Security tab: meet the buyer / seller of a
-      // BestWinger delivery on the map (works with the website too).
+      // Shoopicky delivery on the map (works with the website too).
       const BwTrackScreen(),
     ];
     // Now a tapped notification can open its chat on top of this
     // screen (including one tapped while the app was starting).
     NotificationTapGate.instance.markReadyAfterFirstFrame();
-    // Same for "Track in Webs" links from the BestWinger website.
+    // Same for "Track in Webs" links from the Shoopicky website.
     BwLinks.instance.markReadyAfterFirstFrame();
   }
 
