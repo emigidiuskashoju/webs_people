@@ -8,8 +8,8 @@ import 'bw_saved_deliveries.dart';
 
 /// "Track" tab (replaces the old Security tab).
 ///
-/// Buyers and sellers meet here on the map while a Shoopicky product is being
-/// delivered. It works together with the Shoopicky website: one person can use
+/// Buyers and sellers meet here on the map while a Shopicky product is being
+/// delivered. It works together with the Shopicky website: one person can use
 /// the website and the other the Webs app.
 class BwTrackScreen extends StatefulWidget {
   const BwTrackScreen({super.key});
@@ -48,7 +48,7 @@ class _BwTrackScreenState extends State<BwTrackScreen> {
     _refreshSaved();
   }
 
-  /// Accepts a tracking code (buyer) or the secure link from a Shoopicky email (seller).
+  /// Accepts a tracking code (buyer) or the secure link from a Shopicky email (seller).
   void _track() {
     final text = _input.text.trim();
     if (BwApi.isSellerLink(text)) {
@@ -66,8 +66,8 @@ class _BwTrackScreenState extends State<BwTrackScreen> {
     _openDelivery(BwDeliveryScreen.buyer(code: code));
   }
 
-  Future<void> _visitShoopicky() async {
-    await launchUrl(Uri.parse(kShoopickyUrl), mode: LaunchMode.externalApplication);
+  Future<void> _visitShopicky() async {
+    await launchUrl(Uri.parse(kShopickyUrl), mode: LaunchMode.externalApplication);
   }
 
   @override
@@ -101,7 +101,7 @@ class _BwTrackScreenState extends State<BwTrackScreen> {
                         Text('Meet on the map', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17, color: textDark)),
                         const SizedBox(height: 4),
                         Text(
-                          'Follow a Shoopicky delivery live: the buyer and the seller see each other '
+                          'Follow a Shopicky delivery live: the buyer and the seller see each other '
                           'until the product is handed over. One of you can use the website and the other Webs.',
                           style: TextStyle(color: textLight, height: 1.3),
                         ),
@@ -123,7 +123,7 @@ class _BwTrackScreenState extends State<BwTrackScreen> {
               onSubmitted: (_) => _track(),
               decoration: InputDecoration(
                 hintText: 'SP-7Q3K9P',
-                helperText: 'Your tracking code from Shoopicky. Sellers can paste the link from their order email.',
+                helperText: 'Your tracking code from Shopicky. Sellers can paste the link from their order email.',
                 helperMaxLines: 2,
                 errorText: _inputError,
                 prefixIcon: const Icon(Icons.qr_code_2),
@@ -174,7 +174,7 @@ class _BwTrackScreenState extends State<BwTrackScreen> {
                   )),
             ],
 
-            // ---- Visit Shoopicky
+            // ---- Visit Shopicky
             const SizedBox(height: 22),
             FilledButton.icon(
               style: FilledButton.styleFrom(
@@ -183,13 +183,13 @@ class _BwTrackScreenState extends State<BwTrackScreen> {
                 minimumSize: const Size.fromHeight(52),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               ),
-              onPressed: _visitShoopicky,
+              onPressed: _visitShopicky,
               icon: const Icon(Icons.storefront_outlined),
-              label: const Text('Visit Shoopicky', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              label: const Text('Visit Shopicky', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             ),
             const SizedBox(height: 6),
             Text(
-              'Buy and sell near you on shoopicky.webzapp.org',
+              'Buy and sell near you on shopicky.webzapp.org',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12, color: textLight),
             ),

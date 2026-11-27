@@ -6,9 +6,9 @@ import 'package:flutter/material.dart';
 import 'bw_api.dart';
 import 'bw_delivery_screen.dart';
 
-/// Opens a Shoopicky delivery when Webs is started from a link.
+/// Opens a Shopicky delivery when Webs is started from a link.
 ///
-/// The Shoopicky website's "Track in Webs" buttons open:
+/// The Shopicky website's "Track in Webs" buttons open:
 ///   `webs://bw/track?code=BW-XXXXXX`  (buyer)
 ///   `webs://bw/deliver?link=SECURE_LINK`  (seller / admin)
 /// https://webzapp.org/p/bw/... works the same way.
@@ -57,7 +57,7 @@ class BwLinks {
     navigator.push(MaterialPageRoute(builder: (_) => screen));
   }
 
-  /// The delivery screen for a link, or null when the link is not a Shoopicky one.
+  /// The delivery screen for a link, or null when the link is not a Shopicky one.
   static Widget? screenFor(Uri uri) {
     final List<String> parts;
     if (uri.scheme == 'webs' && uri.host == 'bw') {

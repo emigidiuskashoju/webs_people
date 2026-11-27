@@ -11,15 +11,15 @@ import 'package:webs_people/features/bestwinger/bw_delivery_screen.dart';
 import 'package:webs_people/features/bestwinger/bw_links.dart';
 import 'package:webs_people/features/bestwinger/bw_track_screen.dart';
 
-// Real JSON produced by the Shoopicky website (tests/Feature/WebsAppApiTest.php)
+// Real JSON produced by the Shopicky website (tests/Feature/WebsAppApiTest.php)
 Map<String, dynamic> _fixture(String name) =>
     jsonDecode(File('test/fixtures/$name').readAsStringSync()) as Map<String, dynamic>;
 
 const _sellerLink =
-    'https://shoopicky.webzapp.org/orders/12/respond?by=seller&decision=deliver&expires=1796739641&signature=abc123';
+    'https://shopicky.webzapp.org/orders/12/respond?by=seller&decision=deliver&expires=1796739641&signature=abc123';
 
 void main() {
-  group('Reading Shoopicky orders', () {
+  group('Reading Shopicky orders', () {
     test('buyer view (/track?code=)', () {
       final o = BwOrder.fromJson(_fixture('bestwinger_track.json')['order'] as Map<String, dynamic>);
       expect(o.code, 'BW-3FLKNE');
@@ -58,14 +58,15 @@ void main() {
   });
 
   group('Links', () {
-    test('only secure Shoopicky order links are accepted', () {
+    test('only secure Shopicky order links are accepted', () {
       // links in emails sent before the rename still work
-      expect(BwApi.isSellerLink(_sellerLink.replaceFirst('shoopicky.webzapp.org', 'bestwinger.webzapp.org')), isTrue);
+      expect(BwApi.isSellerLink(_sellerLink.replaceFirst('shopicky.webzapp.org', 'bestwinger.webzapp.org')), isTrue);
+      expect(BwApi.isSellerLink(_sellerLink.replaceFirst('shopicky.webzapp.org', 'shoopicky.webzapp.org')), isTrue);
       expect(BwApi.isSellerLink(_sellerLink), isTrue);
       expect(BwApi.isSellerLink(_sellerLink.replaceFirst('https', 'http')), isFalse);
-      expect(BwApi.isSellerLink(_sellerLink.replaceFirst('shoopicky.webzapp.org', 'evil.example.com')), isFalse);
-      expect(BwApi.isSellerLink('https://shoopicky.webzapp.org/orders/12/respond?by=seller'), isFalse); // no signature
-      expect(BwApi.isSellerLink('https://shoopicky.webzapp.org/admin/orders?signature=x'), isFalse);
+      expect(BwApi.isSellerLink(_sellerLink.replaceFirst('shopicky.webzapp.org', 'evil.example.com')), isFalse);
+      expect(BwApi.isSellerLink('https://shopicky.webzapp.org/orders/12/respond?by=seller'), isFalse); // no signature
+      expect(BwApi.isSellerLink('https://shopicky.webzapp.org/admin/orders?signature=x'), isFalse);
     });
 
     test('"Track in Webs" links open the right screen', () {
@@ -93,22 +94,22 @@ void main() {
     });
 
     test('website link for the same order', () {
-      expect(BwApi.websiteTrackUrl(' bw-3flkne'), 'https://shoopicky.webzapp.org/track?code=BW-3FLKNE&map=1');
+      expect(BwApi.websiteTrackUrl(' bw-3flkne'), 'https://shopicky.webzapp.org/track?code=BW-3FLKNE&map=1');
     });
   });
 
   group('Screens', () {
     setUp(() => SharedPreferences.setMockInitialValues({}));
 
-    testWidgets('Track tab: code box, Visit Shoopicky, validation', (tester) async {
+    testWidgets('Track tab: code box, Visit Shopicky, validation', (tester) async {
       await tester.pumpWidget(const MaterialApp(home: BwTrackScreen()));
       await tester.pumpAndSettle();
 
       expect(find.text('Track'), findsOneWidget);
       expect(find.text('Meet on the map'), findsOneWidget);
       expect(find.text('Track on the map'), findsOneWidget);
-      await tester.dragUntilVisible(find.text('Visit Shoopicky'), find.byType(ListView), const Offset(0, -200));
-      expect(find.text('Visit Shoopicky'), findsOneWidget);
+      await tester.dragUntilVisible(find.text('Visit Shopicky'), find.byType(ListView), const Offset(0, -200));
+      expect(find.text('Visit Shopicky'), findsOneWidget);
 
       await tester.enterText(find.byType(TextField), 'hello');
       await tester.tap(find.text('Track on the map'));
@@ -118,7 +119,7 @@ void main() {
 
     testWidgets('Delivery screen shows the same order as the website', (tester) async {
       final client = MockClient((req) async {
-        if (req.url.host == 'shoopicky.webzapp.org' && req.url.path == '/track') {
+        if (req.url.host == 'shopicky.webzapp.org' && req.url.path == '/track') {
           expect(req.url.queryParameters['code'], 'BW-3FLKNE');
           expect(req.headers['Accept'], 'application/json');
           return http.Response(File('test/fixtures/bestwinger_track.json').readAsStringSync(), 200,
@@ -139,7 +140,7 @@ void main() {
       expect(find.text('Accepted'), findsOneWidget);
       expect(find.textContaining("Seller's location"), findsOneWidget);
       expect(find.text('Share my live location with the seller'), findsOneWidget);
-      expect(find.text('Open on the Shoopicky website'), findsOneWidget);
+      expect(find.text('Open on the Shopicky website'), findsOneWidget);
 
       // Leave the screen so its 10-second refresh timer stops
       await tester.pumpWidget(const SizedBox());
